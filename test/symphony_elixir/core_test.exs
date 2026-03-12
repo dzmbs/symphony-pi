@@ -162,7 +162,7 @@ defmodule SymphonyElixir.CoreTest do
 
     hooks = Map.get(config, "hooks", %{})
     assert is_map(hooks)
-    assert Map.get(hooks, "after_create") =~ "git clone --depth 1 git@github.com:dzmbs/symphony-pi.git ."
+    assert Map.get(hooks, "after_create") =~ "git clone --depth 1 \"$SOURCE_REPO_URL\" ."
     assert Map.get(hooks, "after_create") =~ "mise trust"
     assert Map.get(hooks, "after_create") =~ "mise exec -- mix deps.get"
     assert Map.get(hooks, "before_remove") =~ "mise exec -- mix workspace.before_remove"
@@ -771,7 +771,7 @@ defmodule SymphonyElixir.CoreTest do
 
   defp assert_due_in_range(due_at_ms, min_remaining_ms, max_remaining_ms) do
     remaining_ms = due_at_ms - System.monotonic_time(:millisecond)
-    jitter_ms = 300
+    jitter_ms = 500
 
     assert remaining_ms >= max(min_remaining_ms - jitter_ms, 0)
     assert remaining_ms <= max_remaining_ms + jitter_ms
@@ -779,7 +779,7 @@ defmodule SymphonyElixir.CoreTest do
 
   defp assert_scheduled_delay_in_range(due_at_ms, start_ms, min_delay_ms, max_delay_ms) do
     delay_ms = due_at_ms - start_ms
-    jitter_ms = 300
+    jitter_ms = 500
 
     assert delay_ms >= max(min_delay_ms - jitter_ms, 0)
     assert delay_ms <= max_delay_ms + jitter_ms

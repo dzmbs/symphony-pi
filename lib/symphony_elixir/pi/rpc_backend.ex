@@ -35,7 +35,7 @@ defmodule SymphonyElixir.Pi.RpcBackend do
   """
   def start_session(workspace, opts) do
     pi_config = Config.settings!().pi
-    session_dir = Path.join(Path.expand(workspace), pi_config.session_subdir)
+    session_dir = session_dir_for(workspace, pi_config)
     worker_host = Keyword.get(opts, :worker_host)
 
     with :ok <- ensure_dir(session_dir),
@@ -367,6 +367,24 @@ defmodule SymphonyElixir.Pi.RpcBackend do
           reverse_forward: {bridge_port, bridge_port}
         ]
     )
+  end
+
+  defp session_dir_for(workspace, %{session_subdir: ".symphony-pi/session"}) do
+    expanded_workspace = Path.expand(workspace)
+
+    Path.join([
+      Path.dirname(expanded_workspace),
+      ".symphony-pi",
+      Path.basename(expanded_workspace),
+      "session"
+    ])
+  end
+
+  defp session_dir_for(workspace, %{session_subdir: session_subdir}) when is_binary(session_subdir) do
+    case Path.type(session_subdir) do
+      :absolute -> session_subdir
+      _ -> Path.join(Path.expand(workspace), session_subdir)
+    end
   end
 
   defp fetch_session_id(%{port: port} = session, pi_config) do

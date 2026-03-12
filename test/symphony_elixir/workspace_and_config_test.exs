@@ -39,6 +39,41 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     end
   end
 
+  test "workspace hooks receive source repo origin urls from the workflow repo" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-workspace-source-repo-env-#{System.unique_integer([:positive])}"
+      )
+
+    original_workflow_path = Workflow.workflow_file_path()
+
+    try do
+      source_repo = Path.join(test_root, "source")
+      workspace_root = Path.join(test_root, "workspaces")
+      workflow_file = Path.join(source_repo, "WORKFLOW.md")
+
+      File.mkdir_p!(source_repo)
+      System.cmd("git", ["-C", source_repo, "init", "-b", "main"])
+      System.cmd("git", ["-C", source_repo, "remote", "add", "origin", "git@github.com:dzmbs/example.git"])
+
+      Workflow.set_workflow_file_path(workflow_file)
+
+      write_workflow_file!(workflow_file,
+        workspace_root: workspace_root,
+        hook_after_create: "printf '%s\\n%s\\n%s\\n' \"$SOURCE_REPO_URL\" \"$SOURCE_REPO_SSH_URL\" \"$SOURCE_REPO_HTTPS_URL\" > source_repo_urls.txt"
+      )
+
+      assert {:ok, workspace} = Workspace.create_for_issue("S-ENV")
+
+      assert File.read!(Path.join(workspace, "source_repo_urls.txt")) ==
+               "git@github.com:dzmbs/example.git\ngit@github.com:dzmbs/example.git\nhttps://github.com/dzmbs/example.git\n"
+    after
+      Workflow.set_workflow_file_path(original_workflow_path)
+      File.rm_rf(test_root)
+    end
+  end
+
   test "workspace path is deterministic per issue identifier" do
     workspace_root =
       Path.join(
@@ -53,6 +88,30 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
     assert first_workspace == second_workspace
     assert Path.basename(first_workspace) == "MT_Det"
+  end
+
+  test "workspace removal also removes default Pi session sidecar data" do
+    workspace_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-workspace-sidecar-cleanup-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      write_workflow_file!(Workflow.workflow_file_path(), workspace_root: workspace_root)
+
+      assert {:ok, workspace} = Workspace.create_for_issue("MT-SIDECAR")
+
+      sidecar_session_dir = Path.join(workspace_root, ".symphony-pi/MT-SIDECAR/session")
+      File.mkdir_p!(sidecar_session_dir)
+      File.write!(Path.join(sidecar_session_dir, "session.jsonl"), "{}\n")
+
+      assert File.exists?(Path.join(sidecar_session_dir, "session.jsonl"))
+      assert {:ok, _removed} = Workspace.remove(workspace)
+      refute File.exists?(Path.join(workspace_root, ".symphony-pi/MT-SIDECAR"))
+    after
+      File.rm_rf(workspace_root)
+    end
   end
 
   test "workspace reuses existing issue directory without deleting local changes" do

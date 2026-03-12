@@ -4,7 +4,7 @@ defmodule SymphonyElixir.Workspace do
   """
 
   require Logger
-  alias SymphonyElixir.{Config, PathSafety, SSH}
+  alias SymphonyElixir.{Config, PathSafety, SSH, Workflow}
 
   @type worker_host :: String.t() | nil
 
@@ -91,12 +91,17 @@ defmodule SymphonyElixir.Workspace do
   @spec remove(Path.t(), worker_host()) :: {:ok, [String.t()]} | {:error, term(), String.t()}
   def remove(workspace, worker_host) when is_binary(worker_host) do
     maybe_run_before_remove_hook(workspace, worker_host)
+    session_sidecar = runtime_sidecar_root(workspace)
 
     script =
       [
         remote_shell_assign("workspace", workspace),
+        remote_shell_assign("session_sidecar", session_sidecar || ""),
         "if [ -d \"$workspace\" ]; then",
         "  rm -rf \"$workspace\"",
+        "fi",
+        "if [ -n \"$session_sidecar\" ] && [ -d \"$session_sidecar\" ]; then",
+        "  rm -rf \"$session_sidecar\"",
         "fi"
       ]
       |> Enum.join("\n")
@@ -115,6 +120,7 @@ defmodule SymphonyElixir.Workspace do
           :ok ->
             maybe_run_before_remove_hook(workspace)
             File.rm_rf(workspace)
+            remove_runtime_sidecar(workspace)
 
           {:error, reason} ->
             {:error, reason, ""}
@@ -122,6 +128,7 @@ defmodule SymphonyElixir.Workspace do
 
       false ->
         File.rm_rf(workspace)
+        remove_runtime_sidecar(workspace)
     end
   end
 
@@ -280,10 +287,11 @@ defmodule SymphonyElixir.Workspace do
 
   defp run_hook(command, workspace, issue_context, hook_name, worker_host) when is_binary(worker_host) do
     timeout_ms = Config.settings!().hooks.timeout_ms
+    hook_env = hook_env(workspace, issue_context)
 
     Logger.info("Running workspace hook hook=#{hook_name} #{issue_log_context(issue_context)} workspace=#{workspace} worker_host=#{worker_host}")
 
-    remote_command = "cd #{shell_escape(workspace)} && #{command}"
+    remote_command = remote_hook_command(workspace, command, hook_env)
 
     case run_remote_command(worker_host, remote_command, timeout_ms) do
       {:ok, cmd_result} ->
@@ -298,12 +306,13 @@ defmodule SymphonyElixir.Workspace do
 
   defp run_hook(command, workspace, issue_context, hook_name, _worker_host) do
     timeout_ms = Config.settings!().hooks.timeout_ms
+    hook_env = hook_env(workspace, issue_context)
 
     Logger.info("Running workspace hook hook=#{hook_name} #{issue_log_context(issue_context)} workspace=#{workspace}")
 
     task =
       Task.async(fn ->
-        System.cmd("sh", ["-lc", command], cd: workspace, stderr_to_stdout: true)
+        System.cmd("sh", ["-lc", command], cd: workspace, stderr_to_stdout: true, env: hook_env)
       end)
 
     case Task.yield(task, timeout_ms) do
@@ -409,6 +418,109 @@ defmodule SymphonyElixir.Workspace do
 
   defp issue_log_context(%{issue_id: issue_id, issue_identifier: issue_identifier}) do
     "issue_id=#{issue_id || "n/a"} issue_identifier=#{issue_identifier || "issue"}"
+  end
+
+  defp hook_env(workspace, issue_context) do
+    []
+    |> maybe_put_env("SYMPHONY_WORKSPACE_PATH", workspace)
+    |> maybe_put_env("SYMPHONY_ISSUE_ID", issue_context.issue_id)
+    |> maybe_put_env("SYMPHONY_ISSUE_IDENTIFIER", issue_context.issue_identifier)
+    |> maybe_put_source_repo_env(source_repo_urls())
+  end
+
+  defp maybe_put_source_repo_env(env, nil), do: env
+
+  defp maybe_put_source_repo_env(env, %{url: url, ssh_url: ssh_url, https_url: https_url}) do
+    env
+    |> maybe_put_env("SOURCE_REPO_URL", url)
+    |> maybe_put_env("SOURCE_REPO_SSH_URL", ssh_url)
+    |> maybe_put_env("SOURCE_REPO_HTTPS_URL", https_url)
+  end
+
+  defp maybe_put_env(env, _key, nil), do: env
+  defp maybe_put_env(env, _key, ""), do: env
+  defp maybe_put_env(env, key, value), do: [{key, to_string(value)} | env]
+
+  defp remote_hook_command(workspace, command, env) do
+    export_lines =
+      env
+      |> Enum.reverse()
+      |> Enum.map(fn {key, value} -> "export #{key}=#{shell_escape(value)}" end)
+
+    (["cd #{shell_escape(workspace)}"] ++ export_lines ++ [command])
+    |> Enum.join("\n")
+  end
+
+  defp source_repo_urls do
+    repo_root = Path.dirname(Path.expand(Workflow.workflow_file_path()))
+
+    case System.cmd("git", ["remote", "get-url", "origin"], cd: repo_root, stderr_to_stdout: true) do
+      {output, 0} ->
+        url = String.trim(output)
+
+        %{
+          url: url,
+          ssh_url: source_repo_ssh_url(url),
+          https_url: source_repo_https_url(url)
+        }
+
+      _ ->
+        nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp source_repo_ssh_url("git@" <> _ = url), do: url
+
+  defp source_repo_ssh_url("ssh://git@" <> rest) do
+    case String.split(rest, "/", parts: 2) do
+      [host, path] -> "git@#{host}:#{path}"
+      _ -> nil
+    end
+  end
+
+  defp source_repo_ssh_url("https://" <> rest) do
+    case String.split(rest, "/", parts: 2) do
+      [host, path] -> "git@#{host}:#{path}"
+      _ -> nil
+    end
+  end
+
+  defp source_repo_ssh_url(_url), do: nil
+
+  defp source_repo_https_url("https://" <> _ = url), do: url
+
+  defp source_repo_https_url("git@" <> rest) do
+    case String.split(rest, ":", parts: 2) do
+      [host, path] -> "https://#{host}/#{path}"
+      _ -> nil
+    end
+  end
+
+  defp source_repo_https_url("ssh://git@" <> rest) do
+    case String.split(rest, "/", parts: 2) do
+      [host, path] -> "https://#{host}/#{path}"
+      _ -> nil
+    end
+  end
+
+  defp source_repo_https_url(_url), do: nil
+
+  defp runtime_sidecar_root(workspace) when is_binary(workspace) do
+    if Config.settings!().pi.session_subdir == ".symphony-pi/session" do
+      expanded_workspace = Path.expand(workspace)
+      Path.join([Path.dirname(expanded_workspace), ".symphony-pi", Path.basename(expanded_workspace)])
+    end
+  end
+
+  defp runtime_sidecar_root(_workspace), do: nil
+
+  defp remove_runtime_sidecar(workspace) do
+    case runtime_sidecar_root(workspace) do
+      path when is_binary(path) -> File.rm_rf(path)
+      _ -> :ok
+    end
   end
 
   defp run_remote_command(worker_host, command, timeout_ms) do

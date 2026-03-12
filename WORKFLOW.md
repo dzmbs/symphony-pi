@@ -19,7 +19,7 @@ workspace:
   root: ~/code/symphony-workspaces
 hooks:
   after_create: |
-    git clone --depth 1 git@github.com:dzmbs/symphony-pi.git .
+    git clone --depth 1 "$SOURCE_REPO_URL" .
     if command -v mise >/dev/null 2>&1; then
       mise trust && mise exec -- mix deps.get
     fi

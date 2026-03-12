@@ -62,9 +62,8 @@ defmodule SymphonyElixir.Pi.IntegrationTest do
         assert_receive {:runtime_worker_update, "pi-issue-1", %{event: :turn_completed, timestamp: %DateTime{}}},
                        2_000
 
-        # Verify the session directory was created
-        workspace = Path.join(workspace_root, "PI-1")
-        session_dir = Path.join(workspace, ".symphony-pi/session")
+        # Verify the session directory was created outside the repo workspace
+        session_dir = Path.join(workspace_root, ".symphony-pi/PI-1/session")
         assert File.dir?(session_dir)
 
         # Verify the trace file shows the prompt was sent

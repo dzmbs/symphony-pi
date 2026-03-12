@@ -117,7 +117,9 @@ Notes:
 - If a value is missing, defaults are used.
 - `agent_runtime.backend` is Pi-only in this repo and defaults to `pi`.
 - `pi.command` defaults to `pi`.
-- `pi.session_subdir` defaults to `.symphony-pi/session`.
+- `pi.session_subdir` defaults to `.symphony-pi/session`, but Symphony stores that default in a
+  sidecar directory next to the workspace clones instead of inside the repo checkout itself, so
+  target repos do not need `.symphony-pi/` in `.gitignore` just to stay clean.
 - `pi.extension_dir` optionally overrides the shipped Symphony Pi extension source. By default,
   Symphony loads its bundled `linear_graphql` extension automatically.
 - Symphony Pi applies a default extension safety policy during orchestrated runs:
@@ -131,9 +133,12 @@ Notes:
   identifier, title, and body.
 - Use `hooks.after_create` to bootstrap a fresh workspace. For a Git-backed repo, you can run
   `git clone ... .` there, along with any other setup commands you need.
-- Prefer SSH clone URLs in `hooks.after_create`, for example
-  `git@github.com:your-org/your-repo.git`. The workspace inherits that remote as `origin`, so an
-  HTTPS clone URL will also force HTTPS pushes later inside the workspace.
+- Workspace hooks automatically receive:
+  - `SOURCE_REPO_URL` as the target repo's current `origin` URL
+  - `SOURCE_REPO_SSH_URL` as an SSH form when it can be derived
+  - `SOURCE_REPO_HTTPS_URL` as an HTTPS form when it can be derived
+- The clean default is `git clone --depth 1 "$SOURCE_REPO_URL" .`, which preserves whether the
+  target repo itself uses SSH or HTTPS and avoids manual remote surgery in generated workspaces.
 - If a hook needs `mise exec` inside a freshly cloned workspace, trust the repo config and fetch
   the project dependencies in `hooks.after_create` before invoking `mise` later from other hooks.
 - `tracker.api_key` reads from `LINEAR_API_KEY` when unset or when value is `$LINEAR_API_KEY`.
@@ -147,7 +152,7 @@ workspace:
   root: $SYMPHONY_WORKSPACE_ROOT
 hooks:
   after_create: |
-    git clone --depth 1 "$SOURCE_REPO_SSH_URL" .
+    git clone --depth 1 "$SOURCE_REPO_URL" .
 pi:
   command: $PI_BIN
   model: anthropic/claude-sonnet-4-5

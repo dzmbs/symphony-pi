@@ -344,6 +344,105 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert snapshot.rate_limits == rate_limits
   end
 
+  test "orchestrator token accounting tracks direct runtime snapshot usage totals" do
+    issue_id = "issue-runtime-snapshot-usage"
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-222",
+      title: "Runtime snapshot token usage",
+      description: "Accumulate direct runtime snapshot totals",
+      state: "In Progress",
+      url: "https://example.org/issues/MT-222"
+    }
+
+    orchestrator_name = Module.concat(__MODULE__, :RuntimeSnapshotUsageOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    initial_state = :sys.get_state(pid)
+    process_ref = make_ref()
+    started_at = DateTime.utc_now()
+
+    running_entry = %{
+      pid: self(),
+      ref: process_ref,
+      identifier: issue.identifier,
+      issue: issue,
+      session_id: nil,
+      last_runtime_message: nil,
+      last_runtime_timestamp: nil,
+      last_runtime_event: nil,
+      runtime_input_tokens: 0,
+      runtime_output_tokens: 0,
+      runtime_cache_read_tokens: 0,
+      runtime_cache_write_tokens: 0,
+      runtime_total_tokens: 0,
+      runtime_cost_total: 0.0,
+      runtime_last_reported_input_tokens: 0,
+      runtime_last_reported_output_tokens: 0,
+      runtime_last_reported_cache_read_tokens: 0,
+      runtime_last_reported_cache_write_tokens: 0,
+      runtime_last_reported_total_tokens: 0,
+      runtime_last_reported_cost_total: 0.0,
+      started_at: started_at
+    }
+
+    :sys.replace_state(pid, fn _ ->
+      initial_state
+      |> Map.put(:running, %{issue_id => running_entry})
+      |> Map.put(:claimed, MapSet.put(initial_state.claimed, issue_id))
+    end)
+
+    send(
+      pid,
+      {:runtime_worker_update, issue_id,
+       %{
+         event: :runtime_snapshot,
+         usage: %{
+           "input_tokens" => 500,
+           "output_tokens" => 200,
+           "cache_read_tokens" => 100,
+           "cache_write_tokens" => 50,
+           "total_tokens" => 850
+         },
+         cost_total: 0.001,
+         runtime_state: %{
+           model_id: "claude-sonnet-4-5",
+           provider: "anthropic",
+           context_window: 200_000,
+           thinking_level: "high",
+           is_streaming: true,
+           auto_compaction_enabled: true,
+           pending_message_count: 0
+         },
+         timestamp: DateTime.utc_now()
+       }}
+    )
+
+    snapshot = GenServer.call(pid, :snapshot)
+    assert %{running: [snapshot_entry]} = snapshot
+    assert snapshot_entry.runtime_input_tokens == 500
+    assert snapshot_entry.runtime_output_tokens == 200
+    assert snapshot_entry.runtime_cache_read_tokens == 100
+    assert snapshot_entry.runtime_cache_write_tokens == 50
+    assert snapshot_entry.runtime_total_tokens == 850
+    assert snapshot_entry.runtime_cost_total == 0.001
+
+    state = :sys.get_state(pid)
+    assert state.runtime_totals.input_tokens == 500
+    assert state.runtime_totals.output_tokens == 200
+    assert state.runtime_totals.cache_read_tokens == 100
+    assert state.runtime_totals.cache_write_tokens == 50
+    assert state.runtime_totals.total_tokens == 850
+    assert state.runtime_totals.cost_total == 0.001
+  end
+
   test "orchestrator token accounting accumulates monotonic thread token usage totals" do
     issue_id = "issue-thread-token-usage"
 
