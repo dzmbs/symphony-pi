@@ -168,6 +168,12 @@ The extension registers a custom tool named `linear_graphql` with:
 
 - **Input**: `query` (string, required), `variables` (object, optional)
 - **Output**: GraphQL response payload or error payload
+- **Default safety policy**:
+  - blocks obviously dangerous bash commands (`rm -rf`, `sudo`, `mkfs`, `dd ... of=`, etc.)
+  - blocks writes outside the active workspace
+  - blocks access to protected paths such as `.git/`, `.env`, `~/.ssh`, `~/.aws`, and key files
+
+The default safety policy can be disabled explicitly with `SYMPHONY_PI_DISABLE_SAFETY=1`.
 
 ### 5.3 Bridge Architecture
 
@@ -230,6 +236,9 @@ Pi runs in a trusted local mode by default. For constrained environments, operat
 - Use a wrapper command that applies OS-level restrictions
 - Configure Pi extensions that gate or audit tool calls
 - Restrict the workspace root filesystem
+
+In addition, the bundled Symphony Pi extension enforces a small static default safety policy for
+orchestrated runs, covering dangerous bash patterns and protected path access.
 
 ## 8. Test Coverage
 

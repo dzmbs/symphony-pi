@@ -10,7 +10,10 @@
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { isToolCallEventType } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
+import { homedir } from "node:os";
+import { basename, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 
 const LINEAR_GRAPHQL_PARAMS = Type.Object({
 	query: Type.String({ description: "GraphQL query or mutation document to execute against Linear." }),
@@ -21,8 +24,108 @@ const LINEAR_GRAPHQL_PARAMS = Type.Object({
 	),
 });
 
+const DANGEROUS_BASH_PATTERNS = [
+	/\brm\s+(-[A-Za-z]*[rRfF][A-Za-z]*|--recursive|--force)\b/i,
+	/\bsudo\b/i,
+	/\b(chmod|chown)\b[^\n\r]*\b777\b/i,
+	/\bmkfs(?:\.\w+)?\b/i,
+	/\bdd\b[^\n\r]*\bof=/i,
+	/\b(shutdown|reboot|poweroff|halt)\b/i,
+];
+
+const SECRET_HOME_PATHS = [".ssh", ".aws", ".gnupg"];
+const PROTECTED_BASENAMES = [".env", ".npmrc", ".pypirc"];
+const PROTECTED_EXTENSIONS = [".pem", ".key"];
+
+function expandHomePath(value: string): string {
+	if (value === "~") return homedir();
+	if (value.startsWith("~/")) return join(homedir(), value.slice(2));
+	return value;
+}
+
+function normalizeToolPath(candidate: string, cwd: string): string {
+	const cleaned = candidate.startsWith("@") ? candidate.slice(1) : candidate;
+	const expanded = expandHomePath(cleaned);
+	return isAbsolute(expanded) ? normalize(expanded) : resolve(cwd, expanded);
+}
+
+function isWithinWorkspace(candidate: string, cwd: string): boolean {
+	const relativePath = relative(cwd, candidate);
+	return relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
+}
+
+function hasProtectedBasename(candidate: string): boolean {
+	const base = basename(candidate);
+	return (
+		PROTECTED_BASENAMES.includes(base) ||
+		base.startsWith(".env.") ||
+		PROTECTED_EXTENSIONS.some((suffix) => base.endsWith(suffix))
+	);
+}
+
+function isProtectedPath(candidate: string): boolean {
+	const normalizedPath = normalize(candidate);
+	const home = homedir();
+	const gitSegment = `${sep}.git${sep}`;
+
+	if (normalizedPath === join(home, ".ssh") || normalizedPath.startsWith(join(home, ".ssh") + sep)) return true;
+	if (normalizedPath === join(home, ".aws") || normalizedPath.startsWith(join(home, ".aws") + sep)) return true;
+	if (normalizedPath === join(home, ".gnupg") || normalizedPath.startsWith(join(home, ".gnupg") + sep)) return true;
+
+	if (normalizedPath.includes(gitSegment) || normalizedPath.endsWith(`${sep}.git`) || basename(normalizedPath) === ".git") return true;
+
+	return hasProtectedBasename(normalizedPath);
+}
+
+function commandTouchesSecretHomePath(command: string): boolean {
+	return SECRET_HOME_PATHS.some((segment) => command.includes(`~/${segment}`) || command.includes(`/${segment}`));
+}
+
 export default function symphonyExtension(pi: ExtensionAPI) {
 	const bridgeUrl = process.env.SYMPHONY_TOOL_BRIDGE_URL;
+	const safetyDisabled = process.env.SYMPHONY_PI_DISABLE_SAFETY === "1";
+
+	if (!safetyDisabled) {
+		pi.on("tool_call", async (event, ctx) => {
+			if (isToolCallEventType("bash", event)) {
+				const command = event.input.command ?? "";
+
+				if (DANGEROUS_BASH_PATTERNS.some((pattern) => pattern.test(command))) {
+					return {
+						block: true,
+						reason: "Blocked dangerous bash command by Symphony Pi safety policy.",
+					};
+				}
+
+				if (commandTouchesSecretHomePath(command)) {
+					return {
+						block: true,
+						reason: "Blocked bash command touching protected home-directory secrets.",
+					};
+				}
+			}
+
+			if (isToolCallEventType("read", event) || isToolCallEventType("write", event) || isToolCallEventType("edit", event)) {
+				const resolvedPath = normalizeToolPath(event.input.path, ctx.cwd);
+
+				if ((isToolCallEventType("write", event) || isToolCallEventType("edit", event)) && !isWithinWorkspace(resolvedPath, ctx.cwd)) {
+					return {
+						block: true,
+						reason: "Blocked write outside the current workspace.",
+					};
+				}
+
+				if (isProtectedPath(resolvedPath)) {
+					return {
+						block: true,
+						reason: "Blocked access to a protected path by Symphony Pi safety policy.",
+					};
+				}
+			}
+
+			return undefined;
+		});
+	}
 
 	pi.registerTool({
 		name: "linear_graphql",

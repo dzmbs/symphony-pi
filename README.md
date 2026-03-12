@@ -120,12 +120,20 @@ Notes:
 - `pi.session_subdir` defaults to `.symphony-pi/session`.
 - `pi.extension_dir` optionally overrides the shipped Symphony Pi extension source. By default,
   Symphony loads its bundled `linear_graphql` extension automatically.
+- Symphony Pi applies a default extension safety policy during orchestrated runs:
+  - blocks obviously dangerous bash commands such as `rm -rf`, `sudo`, `mkfs`, and `dd ... of=`
+  - blocks writes outside the current workspace
+  - blocks access to protected paths such as `.git/`, `.env`, `~/.ssh`, `~/.aws`, and key files
+- Set `SYMPHONY_PI_DISABLE_SAFETY=1` only if you intentionally want to disable those guardrails.
 - `agent.max_turns` caps how many back-to-back Pi prompts Symphony will run in a single agent
   invocation when a turn completes normally but the issue is still in an active state. Default: `20`.
 - If the Markdown body is blank, Symphony uses a default prompt template that includes the issue
   identifier, title, and body.
 - Use `hooks.after_create` to bootstrap a fresh workspace. For a Git-backed repo, you can run
   `git clone ... .` there, along with any other setup commands you need.
+- Prefer SSH clone URLs in `hooks.after_create`, for example
+  `git@github.com:your-org/your-repo.git`. The workspace inherits that remote as `origin`, so an
+  HTTPS clone URL will also force HTTPS pushes later inside the workspace.
 - If a hook needs `mise exec` inside a freshly cloned workspace, trust the repo config and fetch
   the project dependencies in `hooks.after_create` before invoking `mise` later from other hooks.
 - `tracker.api_key` reads from `LINEAR_API_KEY` when unset or when value is `$LINEAR_API_KEY`.
@@ -139,7 +147,7 @@ workspace:
   root: $SYMPHONY_WORKSPACE_ROOT
 hooks:
   after_create: |
-    git clone --depth 1 "$SOURCE_REPO_URL" .
+    git clone --depth 1 "$SOURCE_REPO_SSH_URL" .
 pi:
   command: $PI_BIN
   model: anthropic/claude-sonnet-4-5
@@ -170,6 +178,23 @@ This repo ships:
 The runtime service itself loads the bundled extension source from `priv/pi/extensions/symphony/`
 when launching Pi in orchestration mode. Installing the Pi package from this repo is mainly for
 sharing the skills, not for injecting the runtime bridge into unrelated interactive sessions.
+
+## Runtime Safety
+
+Symphony Pi enables a minimal default safety layer in its bundled Pi extension:
+
+- blocks obviously dangerous bash commands
+- blocks writes outside the active workspace
+- blocks access to common secret and protected paths
+
+This is intentionally simple and non-interactive. It is meant to prevent the most common foot-guns
+in unattended runs without introducing approval prompts.
+
+If you explicitly need unrestricted behavior for debugging, set:
+
+```bash
+export SYMPHONY_PI_DISABLE_SAFETY=1
+```
 
 ### Install Skills Into Another Repo
 
@@ -242,6 +267,16 @@ Optional environment variables:
 
 Unlike upstream Symphony, Symphony Pi does not ship a Docker-backed SSH worker fallback. The SSH
 live test targets a real host with `pi` installed.
+
+## Git Auth
+
+Symphony Pi works best when repository workspaces use SSH remotes end to end:
+
+- authenticate normal `git` operations with GitHub SSH keys
+- use SSH clone URLs in `hooks.after_create`
+- let workspace pushes use `git@github.com:...` instead of HTTPS
+
+This avoids HTTPS credential drift inside per-issue workspaces and is the recommended setup.
 
 The live test creates a temporary Linear project and issue, writes a temporary `WORKFLOW.md`,
 runs a real agent turn, verifies the workspace side effect, requires Pi to comment on and close
