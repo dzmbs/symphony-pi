@@ -600,15 +600,24 @@ defmodule SymphonyElixir.CoreTest do
       |> Map.put(:retry_attempts, %{})
     end)
 
+    before_down_ms = System.monotonic_time(:millisecond)
     send(pid, {:DOWN, ref, :process, self(), :normal})
-    Process.sleep(50)
-    state = :sys.get_state(pid)
+
+    state =
+      wait_for_orchestrator(fn ->
+        state = :sys.get_state(pid)
+
+        case state.retry_attempts[issue_id] do
+          %{attempt: 1, due_at_ms: due_at_ms} when is_integer(due_at_ms) -> {:ok, state}
+          _ -> :retry
+        end
+      end)
 
     refute Map.has_key?(state.running, issue_id)
     assert MapSet.member?(state.completed, issue_id)
     assert %{attempt: 1, due_at_ms: due_at_ms} = state.retry_attempts[issue_id]
     assert is_integer(due_at_ms)
-    assert_due_in_range(due_at_ms, 500, 1_100)
+    assert_scheduled_delay_in_range(due_at_ms, before_down_ms, 500, 1_300)
   end
 
   test "abnormal worker exit increments retry attempt progressively" do
@@ -767,6 +776,29 @@ defmodule SymphonyElixir.CoreTest do
     assert remaining_ms >= max(min_remaining_ms - jitter_ms, 0)
     assert remaining_ms <= max_remaining_ms + jitter_ms
   end
+
+  defp assert_scheduled_delay_in_range(due_at_ms, start_ms, min_delay_ms, max_delay_ms) do
+    delay_ms = due_at_ms - start_ms
+    jitter_ms = 300
+
+    assert delay_ms >= max(min_delay_ms - jitter_ms, 0)
+    assert delay_ms <= max_delay_ms + jitter_ms
+  end
+
+  defp wait_for_orchestrator(fun, attempts \\ 20)
+
+  defp wait_for_orchestrator(fun, attempts) when attempts > 0 do
+    case fun.() do
+      {:ok, value} ->
+        value
+
+      :retry ->
+        Process.sleep(25)
+        wait_for_orchestrator(fun, attempts - 1)
+    end
+  end
+
+  defp wait_for_orchestrator(_fun, 0), do: flunk("orchestrator state did not settle in time")
 
   defp restore_app_env(key, nil), do: Application.delete_env(:symphony_elixir, key)
   defp restore_app_env(key, value), do: Application.put_env(:symphony_elixir, key, value)
