@@ -600,13 +600,11 @@ defmodule SymphonyElixir.Pi.RpcBackend do
       _ ->
         priv_source = Application.app_dir(:symphony_elixir, "priv/pi/extensions/symphony/index.ts")
 
-        cond do
-          File.regular?(priv_source) ->
-            priv_source
-
-          true ->
-            dev_source = Path.expand("../../../.pi/extensions/symphony/index.ts", __DIR__)
-            if File.regular?(dev_source), do: dev_source, else: nil
+        if File.regular?(priv_source) do
+          priv_source
+        else
+          dev_source = Path.expand("../../../.pi/extensions/symphony/index.ts", __DIR__)
+          if File.regular?(dev_source), do: dev_source, else: nil
         end
     end
   end

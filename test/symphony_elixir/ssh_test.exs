@@ -175,7 +175,7 @@ defmodule SymphonyElixir.SSHTest do
     """)
 
     assert {:ok, port} =
-             SSH.start_port("worker-01:2200", "printf ok", line: 256, reverse_forward: {43123, 43123})
+             SSH.start_port("worker-01:2200", "printf ok", line: 256, reverse_forward: {43_123, 43_123})
 
     assert is_port(port)
     wait_for_trace!(trace_file)

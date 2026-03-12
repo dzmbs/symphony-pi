@@ -71,13 +71,7 @@ defmodule SymphonyElixir.Pi.RpcClient do
           line: @port_line_bytes
         ]
 
-        port_opts =
-          if env_vars != [] do
-            charlist_env = Enum.map(env_vars, fn {k, v} -> {String.to_charlist(k), String.to_charlist(v)} end)
-            Keyword.put(port_opts, :env, charlist_env)
-          else
-            port_opts
-          end
+        port_opts = maybe_put_env(port_opts, env_vars)
 
         port = Port.open({:spawn_executable, String.to_charlist(resolved)}, port_opts)
         {:ok, port}
@@ -98,9 +92,9 @@ defmodule SymphonyElixir.Pi.RpcClient do
     # Build the remote command: set env vars, cd to workspace, run pi
     # All values are properly shell-escaped to prevent injection
     env_prefix =
-      env_vars
-      |> Enum.map(fn {k, v} -> "export #{shell_escape_var_name(k)}=#{shell_escape(v)}" end)
-      |> Enum.join("; ")
+      Enum.map_join(env_vars, "; ", fn {k, v} ->
+        "export #{shell_escape_var_name(k)}=#{shell_escape(v)}"
+      end)
 
     command_str = Enum.map_join([executable | args], " ", &shell_escape/1)
 
@@ -128,6 +122,17 @@ defmodule SymphonyElixir.Pi.RpcClient do
 
   defp shell_escape(value) when is_binary(value) do
     "'" <> String.replace(value, "'", "'\"'\"'") <> "'"
+  end
+
+  defp maybe_put_env(port_opts, []), do: port_opts
+
+  defp maybe_put_env(port_opts, env_vars) do
+    charlist_env =
+      Enum.map(env_vars, fn {k, v} ->
+        {String.to_charlist(k), String.to_charlist(v)}
+      end)
+
+    Keyword.put(port_opts, :env, charlist_env)
   end
 
   @doc """

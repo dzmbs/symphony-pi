@@ -145,7 +145,16 @@ defmodule SymphonyElixir.Config.Schema do
       schema
       |> cast(
         attrs,
-        [:command, :model, :thinking, :session_subdir, :extension_dir, :turn_timeout_ms, :read_timeout_ms, :stall_timeout_ms],
+        [
+          :command,
+          :model,
+          :thinking,
+          :session_subdir,
+          :extension_dir,
+          :turn_timeout_ms,
+          :read_timeout_ms,
+          :stall_timeout_ms
+        ],
         empty_values: []
       )
       |> validate_required([:command])

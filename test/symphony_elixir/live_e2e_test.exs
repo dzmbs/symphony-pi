@@ -333,6 +333,7 @@ defmodule SymphonyElixir.LiveE2ETest do
     workflow_root = Path.join(test_root, "workflow")
     workflow_file = Path.join(workflow_root, "WORKFLOW.md")
     worker_host = System.fetch_env!("SYMPHONY_LIVE_SSH_WORKER_HOST")
+
     remote_workspace_root =
       System.get_env("SYMPHONY_LIVE_SSH_WORKSPACE_ROOT") || "~/.symphony-pi-live-workspaces"
 
