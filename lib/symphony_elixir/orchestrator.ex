@@ -17,7 +17,10 @@ defmodule SymphonyElixir.Orchestrator do
   @empty_runtime_totals %{
     input_tokens: 0,
     output_tokens: 0,
+    cache_read_tokens: 0,
+    cache_write_tokens: 0,
     total_tokens: 0,
+    cost_total: 0.0,
     seconds_running: 0
   }
 
@@ -703,10 +706,24 @@ defmodule SymphonyElixir.Orchestrator do
             runtime_pid: nil,
             runtime_input_tokens: 0,
             runtime_output_tokens: 0,
+            runtime_cache_read_tokens: 0,
+            runtime_cache_write_tokens: 0,
             runtime_total_tokens: 0,
+            runtime_cost_total: 0.0,
             runtime_last_reported_input_tokens: 0,
             runtime_last_reported_output_tokens: 0,
+            runtime_last_reported_cache_read_tokens: 0,
+            runtime_last_reported_cache_write_tokens: 0,
             runtime_last_reported_total_tokens: 0,
+            runtime_last_reported_cost_total: 0.0,
+            runtime_model_id: nil,
+            runtime_provider: nil,
+            runtime_context_window: nil,
+            runtime_thinking_level: nil,
+            runtime_is_streaming: nil,
+            runtime_is_compacting: nil,
+            runtime_auto_compaction_enabled: nil,
+            runtime_pending_message_count: nil,
             turn_count: 0,
             retry_attempt: normalize_retry_attempt(attempt),
             started_at: DateTime.utc_now(),
@@ -1103,14 +1120,25 @@ defmodule SymphonyElixir.Orchestrator do
           runtime_pid: metadata.runtime_pid,
           runtime_input_tokens: metadata.runtime_input_tokens,
           runtime_output_tokens: metadata.runtime_output_tokens,
+          runtime_cache_read_tokens: Map.get(metadata, :runtime_cache_read_tokens, 0),
+          runtime_cache_write_tokens: Map.get(metadata, :runtime_cache_write_tokens, 0),
           runtime_total_tokens: metadata.runtime_total_tokens,
+          runtime_cost_total: Map.get(metadata, :runtime_cost_total, 0.0),
           turn_count: Map.get(metadata, :turn_count, 0),
           started_at: metadata.started_at,
           last_runtime_timestamp: metadata.last_runtime_timestamp,
           last_runtime_message: metadata.last_runtime_message,
           last_runtime_event: metadata.last_runtime_event,
           runtime_seconds: running_seconds(metadata.started_at, now),
-          worker_host: Map.get(metadata, :worker_host)
+          worker_host: Map.get(metadata, :worker_host),
+          runtime_model_id: Map.get(metadata, :runtime_model_id),
+          runtime_provider: Map.get(metadata, :runtime_provider),
+          runtime_context_window: Map.get(metadata, :runtime_context_window),
+          runtime_thinking_level: Map.get(metadata, :runtime_thinking_level),
+          runtime_is_streaming: Map.get(metadata, :runtime_is_streaming),
+          runtime_is_compacting: Map.get(metadata, :runtime_is_compacting),
+          runtime_auto_compaction_enabled: Map.get(metadata, :runtime_auto_compaction_enabled),
+          runtime_pending_message_count: Map.get(metadata, :runtime_pending_message_count)
         }
       end)
 
@@ -1160,28 +1188,68 @@ defmodule SymphonyElixir.Orchestrator do
     token_delta = extract_token_delta(running_entry, update)
     runtime_input_tokens = Map.get(running_entry, :runtime_input_tokens, 0)
     runtime_output_tokens = Map.get(running_entry, :runtime_output_tokens, 0)
+    runtime_cache_read_tokens = Map.get(running_entry, :runtime_cache_read_tokens, 0)
+    runtime_cache_write_tokens = Map.get(running_entry, :runtime_cache_write_tokens, 0)
     runtime_total_tokens = Map.get(running_entry, :runtime_total_tokens, 0)
+    runtime_cost_total = Map.get(running_entry, :runtime_cost_total, 0.0)
     runtime_pid = Map.get(running_entry, :runtime_pid)
     last_reported_input = Map.get(running_entry, :runtime_last_reported_input_tokens, 0)
     last_reported_output = Map.get(running_entry, :runtime_last_reported_output_tokens, 0)
+    last_reported_cache_read = Map.get(running_entry, :runtime_last_reported_cache_read_tokens, 0)
+    last_reported_cache_write = Map.get(running_entry, :runtime_last_reported_cache_write_tokens, 0)
     last_reported_total = Map.get(running_entry, :runtime_last_reported_total_tokens, 0)
+    last_reported_cost = Map.get(running_entry, :runtime_last_reported_cost_total, 0.0)
     turn_count = Map.get(running_entry, :turn_count, 0)
+    stats_only? = stats_only_update?(update)
+
+    base_updates = %{
+      session_id: session_id_for_update(running_entry.session_id, update),
+      runtime_pid: runtime_pid_for_update(runtime_pid, update),
+      runtime_input_tokens: runtime_input_tokens + token_delta.input_tokens,
+      runtime_output_tokens: runtime_output_tokens + token_delta.output_tokens,
+      runtime_cache_read_tokens: runtime_cache_read_tokens + token_delta.cache_read_tokens,
+      runtime_cache_write_tokens: runtime_cache_write_tokens + token_delta.cache_write_tokens,
+      runtime_total_tokens: runtime_total_tokens + token_delta.total_tokens,
+      runtime_cost_total: runtime_cost_total + token_delta.cost_total,
+      runtime_last_reported_input_tokens: max(last_reported_input, token_delta.input_reported),
+      runtime_last_reported_output_tokens: max(last_reported_output, token_delta.output_reported),
+      runtime_last_reported_cache_read_tokens: max(last_reported_cache_read, token_delta.cache_read_reported),
+      runtime_last_reported_cache_write_tokens: max(last_reported_cache_write, token_delta.cache_write_reported),
+      runtime_last_reported_total_tokens: max(last_reported_total, token_delta.total_reported),
+      runtime_last_reported_cost_total: max(last_reported_cost, token_delta.cost_reported),
+      turn_count: turn_count_for_update(turn_count, running_entry.session_id, update),
+      runtime_model_id: runtime_model_id_for_update(Map.get(running_entry, :runtime_model_id), update),
+      runtime_provider: runtime_provider_for_update(Map.get(running_entry, :runtime_provider), update),
+      runtime_context_window: runtime_context_window_for_update(Map.get(running_entry, :runtime_context_window), update),
+      runtime_thinking_level: runtime_thinking_level_for_update(Map.get(running_entry, :runtime_thinking_level), update),
+      runtime_is_streaming: runtime_bool_for_update(Map.get(running_entry, :runtime_is_streaming), update, :is_streaming),
+      runtime_is_compacting: runtime_bool_for_update(Map.get(running_entry, :runtime_is_compacting), update, :is_compacting),
+      runtime_auto_compaction_enabled:
+        runtime_bool_for_update(
+          Map.get(running_entry, :runtime_auto_compaction_enabled),
+          update,
+          :auto_compaction_enabled
+        ),
+      runtime_pending_message_count:
+        runtime_pending_message_count_for_update(
+          Map.get(running_entry, :runtime_pending_message_count),
+          update
+        )
+    }
 
     {
-      Map.merge(running_entry, %{
-        last_runtime_timestamp: timestamp,
-        last_runtime_message: summarize_runtime_update(update),
-        session_id: session_id_for_update(running_entry.session_id, update),
-        last_runtime_event: event,
-        runtime_pid: runtime_pid_for_update(runtime_pid, update),
-        runtime_input_tokens: runtime_input_tokens + token_delta.input_tokens,
-        runtime_output_tokens: runtime_output_tokens + token_delta.output_tokens,
-        runtime_total_tokens: runtime_total_tokens + token_delta.total_tokens,
-        runtime_last_reported_input_tokens: max(last_reported_input, token_delta.input_reported),
-        runtime_last_reported_output_tokens: max(last_reported_output, token_delta.output_reported),
-        runtime_last_reported_total_tokens: max(last_reported_total, token_delta.total_reported),
-        turn_count: turn_count_for_update(turn_count, running_entry.session_id, update)
-      }),
+      Map.merge(
+        running_entry,
+        if stats_only? do
+          base_updates
+        else
+          Map.merge(base_updates, %{
+            last_runtime_timestamp: timestamp,
+            last_runtime_message: summarize_runtime_update(update),
+            last_runtime_event: event
+          })
+        end
+      ),
       token_delta
     }
   end
@@ -1270,7 +1338,10 @@ defmodule SymphonyElixir.Orchestrator do
         %{
           input_tokens: 0,
           output_tokens: 0,
+          cache_read_tokens: 0,
+          cache_write_tokens: 0,
           total_tokens: 0,
+          cost_total: 0.0,
           seconds_running: runtime_seconds
         }
       )
@@ -1328,7 +1399,10 @@ defmodule SymphonyElixir.Orchestrator do
   defp apply_token_delta(runtime_totals, token_delta) do
     input_tokens = Map.get(runtime_totals, :input_tokens, 0) + token_delta.input_tokens
     output_tokens = Map.get(runtime_totals, :output_tokens, 0) + token_delta.output_tokens
+    cache_read_tokens = Map.get(runtime_totals, :cache_read_tokens, 0) + Map.get(token_delta, :cache_read_tokens, 0)
+    cache_write_tokens = Map.get(runtime_totals, :cache_write_tokens, 0) + Map.get(token_delta, :cache_write_tokens, 0)
     total_tokens = Map.get(runtime_totals, :total_tokens, 0) + token_delta.total_tokens
+    cost_total = Map.get(runtime_totals, :cost_total, 0.0) + Map.get(token_delta, :cost_total, 0.0)
 
     seconds_running =
       Map.get(runtime_totals, :seconds_running, 0) + Map.get(token_delta, :seconds_running, 0)
@@ -1336,7 +1410,10 @@ defmodule SymphonyElixir.Orchestrator do
     %{
       input_tokens: max(0, input_tokens),
       output_tokens: max(0, output_tokens),
+      cache_read_tokens: max(0, cache_read_tokens),
+      cache_write_tokens: max(0, cache_write_tokens),
       total_tokens: max(0, total_tokens),
+      cost_total: max(0.0, cost_total),
       seconds_running: max(0, seconds_running)
     }
   end
@@ -1360,20 +1437,39 @@ defmodule SymphonyElixir.Orchestrator do
       ),
       compute_token_delta(
         running_entry,
+        :cache_read,
+        usage,
+        :runtime_last_reported_cache_read_tokens
+      ),
+      compute_token_delta(
+        running_entry,
+        :cache_write,
+        usage,
+        :runtime_last_reported_cache_write_tokens
+      ),
+      compute_token_delta(
+        running_entry,
         :total,
         usage,
         :runtime_last_reported_total_tokens
-      )
+      ),
+      compute_cost_delta(running_entry, update, :runtime_last_reported_cost_total)
     }
     |> Tuple.to_list()
-    |> then(fn [input, output, total] ->
+    |> then(fn [input, output, cache_read, cache_write, total, cost] ->
       %{
         input_tokens: input.delta,
         output_tokens: output.delta,
+        cache_read_tokens: cache_read.delta,
+        cache_write_tokens: cache_write.delta,
         total_tokens: total.delta,
         input_reported: input.reported,
         output_reported: output.reported,
-        total_reported: total.reported
+        cache_read_reported: cache_read.reported,
+        cache_write_reported: cache_write.reported,
+        total_reported: total.reported,
+        cost_total: cost.delta,
+        cost_reported: cost.reported
       }
     end)
   end
@@ -1392,6 +1488,23 @@ defmodule SymphonyElixir.Orchestrator do
     %{
       delta: max(delta, 0),
       reported: if(is_integer(next_total), do: next_total, else: prev_reported)
+    }
+  end
+
+  defp compute_cost_delta(running_entry, update, reported_key) do
+    next_total = extract_cost_total(update)
+    prev_reported = Map.get(running_entry, reported_key, 0.0)
+
+    delta =
+      if is_number(next_total) and next_total >= prev_reported do
+        next_total - prev_reported
+      else
+        0.0
+      end
+
+    %{
+      delta: max(delta, 0.0),
+      reported: if(is_number(next_total), do: next_total, else: prev_reported)
     }
   end
 
@@ -1418,6 +1531,67 @@ defmodule SymphonyElixir.Orchestrator do
       rate_limits_from_payload(Map.get(update, "payload")) ||
       rate_limits_from_payload(update)
   end
+
+  defp extract_cost_total(update) when is_map(update) do
+    direct =
+      update[:cost_total] ||
+        Map.get(update, "cost_total") ||
+        map_at_path(update, [:cost, :total]) ||
+        map_at_path(update, ["cost", "total"]) ||
+        map_at_path(update, [:payload, :cost, :total]) ||
+        map_at_path(update, ["payload", "cost", "total"])
+
+    if is_number(direct), do: direct
+  end
+
+  defp extract_cost_total(_update), do: nil
+
+  defp stats_only_update?(%{event: :runtime_snapshot}), do: true
+  defp stats_only_update?(_update), do: false
+
+  defp runtime_model_id_for_update(_existing, %{runtime_state: %{model_id: model_id}})
+       when is_binary(model_id),
+       do: model_id
+
+  defp runtime_model_id_for_update(existing, _update), do: existing
+
+  defp runtime_provider_for_update(_existing, %{runtime_state: %{provider: provider}})
+       when is_binary(provider),
+       do: provider
+
+  defp runtime_provider_for_update(existing, _update), do: existing
+
+  defp runtime_context_window_for_update(_existing, %{runtime_state: %{context_window: context_window}})
+       when is_integer(context_window) and context_window > 0,
+       do: context_window
+
+  defp runtime_context_window_for_update(existing, _update), do: existing
+
+  defp runtime_thinking_level_for_update(_existing, %{runtime_state: %{thinking_level: level}})
+       when is_binary(level),
+       do: level
+
+  defp runtime_thinking_level_for_update(existing, _update), do: existing
+
+  defp runtime_bool_for_update(existing, %{runtime_state: runtime_state}, key)
+       when is_map(runtime_state) do
+    value = Map.get(runtime_state, key)
+    string_value = Map.get(runtime_state, Atom.to_string(key))
+
+    cond do
+      is_boolean(value) -> value
+      is_boolean(string_value) -> string_value
+      true -> existing
+    end
+  end
+
+  defp runtime_bool_for_update(existing, _update, _key), do: existing
+
+  defp runtime_pending_message_count_for_update(_existing, %{runtime_state: %{pending_message_count: count}})
+       when is_integer(count) and count >= 0,
+       do: count
+
+  defp runtime_pending_message_count_for_update(existing, _update), do: existing
 
   defp absolute_token_usage_from_payload(payload) when is_map(payload) do
     absolute_paths = [
@@ -1606,6 +1780,32 @@ defmodule SymphonyElixir.Orchestrator do
         :total,
         "totalTokens",
         :totalTokens
+      ])
+
+  defp get_token_usage(usage, :cache_read),
+    do:
+      payload_get(usage, [
+        "cache_read_tokens",
+        :cache_read_tokens,
+        "cacheReadTokens",
+        :cacheReadTokens,
+        "cacheRead",
+        :cacheRead,
+        "cache_read",
+        :cache_read
+      ])
+
+  defp get_token_usage(usage, :cache_write),
+    do:
+      payload_get(usage, [
+        "cache_write_tokens",
+        :cache_write_tokens,
+        "cacheWriteTokens",
+        :cacheWriteTokens,
+        "cacheWrite",
+        :cacheWrite,
+        "cache_write",
+        :cache_write
       ])
 
   defp payload_get(payload, fields) when is_list(fields) do

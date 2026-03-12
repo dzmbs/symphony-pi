@@ -38,6 +38,13 @@ while IFS= read -r line; do
         send "{\"type\":\"response\",\"command\":\"get_state\",\"success\":true,\"data\":{\"isStreaming\":false,\"sessionId\":\"fake-fail-session\"}}"
       fi
       ;;
+    get_session_stats)
+      if [ -n "$cmd_id" ]; then
+        send "{\"type\":\"response\",\"command\":\"get_session_stats\",\"success\":true,\"id\":\"$cmd_id\",\"data\":{\"sessionId\":\"fake-fail-session\",\"tokens\":{\"input\":100,\"output\":25,\"cacheRead\":10,\"cacheWrite\":5,\"total\":140},\"cost\":0.0005}}"
+      else
+        send "{\"type\":\"response\",\"command\":\"get_session_stats\",\"success\":true,\"data\":{\"sessionId\":\"fake-fail-session\",\"tokens\":{\"input\":100,\"output\":25,\"cacheRead\":10,\"cacheWrite\":5,\"total\":140},\"cost\":0.0005}}"
+      fi
+      ;;
     prompt)
       if [ -n "$cmd_id" ]; then
         send "{\"type\":\"response\",\"command\":\"prompt\",\"success\":true,\"id\":\"$cmd_id\"}"

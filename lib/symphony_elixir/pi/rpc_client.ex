@@ -133,11 +133,18 @@ defmodule SymphonyElixir.Pi.RpcClient do
   @doc """
   Send a command map as a JSONL line to Pi's stdin.
   """
-  @spec send_command(port_ref(), map()) :: :ok
+  @spec send_command(port_ref(), map()) :: :ok | {:error, :port_closed}
   def send_command(port, command) when is_port(port) and is_map(command) do
     line = Jason.encode!(command) <> "\n"
-    Port.command(port, line)
-    :ok
+
+    try do
+      case Port.command(port, line) do
+        true -> :ok
+        false -> {:error, :port_closed}
+      end
+    rescue
+      ArgumentError -> {:error, :port_closed}
+    end
   end
 
   @doc """
@@ -320,6 +327,20 @@ defmodule SymphonyElixir.Pi.RpcClient do
   @spec get_state_command(keyword()) :: map()
   def get_state_command(opts \\ []) do
     cmd = %{"type" => "get_state"}
+
+    if id = Keyword.get(opts, :id) do
+      Map.put(cmd, "id", id)
+    else
+      cmd
+    end
+  end
+
+  @doc """
+  Build a get_session_stats command map.
+  """
+  @spec get_session_stats_command(keyword()) :: map()
+  def get_session_stats_command(opts \\ []) do
+    cmd = %{"type" => "get_session_stats"}
 
     if id = Keyword.get(opts, :id) do
       Map.put(cmd, "id", id)

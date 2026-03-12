@@ -18,6 +18,9 @@ defmodule SymphonyElixir.Pi.RpcBackend do
 
   @prompt_command_id "symphony-prompt"
   @get_state_command_id "symphony-get-state"
+  @get_state_snapshot_command_id "symphony-get-state-snapshot"
+  @get_session_stats_command_id "symphony-get-session-stats"
+  @stats_poll_interval_ms 1_000
 
   # ---------------------------------------------------------------------------
   # AgentBackend callbacks
@@ -85,27 +88,31 @@ defmodule SymphonyElixir.Pi.RpcBackend do
 
     Logger.info("Pi RPC sending prompt for #{issue_context(issue)} pi_pid=#{pi_pid || "unknown"}")
 
-    :ok = RpcClient.send_command(port, command)
+    case RpcClient.send_command(port, command) do
+      :ok ->
+        case RpcClient.await_response(port, @prompt_command_id, pi_config.read_timeout_ms) do
+          {:ok, _response, early_events} ->
+            # Forward any events that arrived before the response
+            Enum.each(early_events, fn event ->
+              normalized = EventNormalizer.normalize(event, normalizer_context(session))
+              on_message.(normalized)
+            end)
 
-    # Await the prompt acknowledgment response
-    case RpcClient.await_response(port, @prompt_command_id, pi_config.read_timeout_ms) do
-      {:ok, _response, early_events} ->
-        # Forward any events that arrived before the response
-        Enum.each(early_events, fn event ->
-          normalized = EventNormalizer.normalize(event, normalizer_context(session))
-          on_message.(normalized)
-        end)
+            # Now consume the event stream until agent_end or failure
+            consume_events(session, on_message, pi_config)
 
-        # Now consume the event stream until agent_end or failure
-        consume_events(session, on_message, pi_config)
+          {:error, {:command_failed, error, _events}} ->
+            Logger.error("Pi RPC prompt rejected for #{issue_context(issue)}: #{inspect(error)}")
+            {:error, {:prompt_rejected, error}}
 
-      {:error, {:command_failed, error, _events}} ->
-        Logger.error("Pi RPC prompt rejected for #{issue_context(issue)}: #{inspect(error)}")
-        {:error, {:prompt_rejected, error}}
+          {:error, reason} ->
+            Logger.error("Pi RPC prompt failed for #{issue_context(issue)}: #{inspect(reason)}")
+            {:error, reason}
+        end
 
-      {:error, reason} ->
-        Logger.error("Pi RPC prompt failed for #{issue_context(issue)}: #{inspect(reason)}")
-        {:error, reason}
+      {:error, :port_closed} ->
+        Logger.error("Pi RPC prompt failed for #{issue_context(issue)}: port closed")
+        {:error, {:port_exit, :unknown}}
     end
   end
 
@@ -149,10 +156,38 @@ defmodule SymphonyElixir.Pi.RpcBackend do
     stall_timeout_ms = pi_config.stall_timeout_ms
     now_ms = System.monotonic_time(:millisecond)
 
-    do_consume_events(port, session, on_message, turn_timeout_ms, stall_timeout_ms, "", now_ms, now_ms)
+    case emit_runtime_snapshot(session, on_message, pi_config, force: true) do
+      {:ok, session, last_stats_at_ms} ->
+        do_consume_events(
+          port,
+          session,
+          on_message,
+          pi_config,
+          turn_timeout_ms,
+          stall_timeout_ms,
+          "",
+          now_ms,
+          now_ms,
+          last_stats_at_ms
+        )
+
+      {:terminal, result, session} ->
+        terminal_result(result, session)
+    end
   end
 
-  defp do_consume_events(port, session, on_message, turn_timeout_ms, stall_timeout_ms, buffer, turn_start_ms, last_event_at_ms) do
+  defp do_consume_events(
+         port,
+         session,
+         on_message,
+         pi_config,
+         turn_timeout_ms,
+         stall_timeout_ms,
+         buffer,
+         turn_start_ms,
+         last_event_at_ms,
+         last_stats_at_ms
+       ) do
     now_ms = System.monotonic_time(:millisecond)
 
     # Check both: stall (time since last event) and turn (total elapsed)
@@ -166,7 +201,13 @@ defmodule SymphonyElixir.Pi.RpcBackend do
         normalized = EventNormalizer.normalize(event, normalizer_context(session))
         on_message.(normalized)
 
-        {:ok, %{result: :turn_completed, session_id: turn_scoped_session_id(session)}, session}
+        case emit_runtime_snapshot(session, on_message, pi_config, force: true) do
+          {:ok, session, _last_stats_at_ms} ->
+            {:ok, %{result: :turn_completed, session_id: turn_scoped_session_id(session)}, session}
+
+          {:terminal, result, session} ->
+            terminal_result(result, session)
+        end
 
       {:ok, {:event, %{"type" => "auto_retry_end", "success" => false} = event}, _new_buffer} ->
         # All retries exhausted — this is a hard failure
@@ -190,16 +231,28 @@ defmodule SymphonyElixir.Pi.RpcBackend do
         normalized = EventNormalizer.normalize(event, normalizer_context(session))
         on_message.(normalized)
 
-        do_consume_events(
-          port,
-          session,
-          on_message,
-          turn_timeout_ms,
-          stall_timeout_ms,
-          new_buffer,
-          turn_start_ms,
-          System.monotonic_time(:millisecond)
-        )
+        if port_closed?(port) do
+          {:error, {:port_exit, :unknown}}
+        else
+          case emit_runtime_snapshot(session, on_message, pi_config, last_stats_at_ms: last_stats_at_ms) do
+            {:ok, session, last_stats_at_ms} ->
+              do_consume_events(
+                port,
+                session,
+                on_message,
+                pi_config,
+                turn_timeout_ms,
+                stall_timeout_ms,
+                new_buffer,
+                turn_start_ms,
+                System.monotonic_time(:millisecond),
+                last_stats_at_ms
+              )
+
+            {:terminal, result, session} ->
+              terminal_result(result, session)
+          end
+        end
 
       {:ok, {:response, response}, new_buffer} ->
         # Responses during event streaming (e.g., from auto-retry)
@@ -207,27 +260,37 @@ defmodule SymphonyElixir.Pi.RpcBackend do
         normalized = EventNormalizer.normalize(response, normalizer_context(session))
         on_message.(normalized)
 
-        do_consume_events(
-          port,
-          session,
-          on_message,
-          turn_timeout_ms,
-          stall_timeout_ms,
-          new_buffer,
-          turn_start_ms,
-          System.monotonic_time(:millisecond)
-        )
+        case emit_runtime_snapshot(session, on_message, pi_config, last_stats_at_ms: last_stats_at_ms) do
+          {:ok, session, last_stats_at_ms} ->
+            do_consume_events(
+              port,
+              session,
+              on_message,
+              pi_config,
+              turn_timeout_ms,
+              stall_timeout_ms,
+              new_buffer,
+              turn_start_ms,
+              System.monotonic_time(:millisecond),
+              last_stats_at_ms
+            )
+
+          {:terminal, result, session} ->
+            terminal_result(result, session)
+        end
 
       {:ok, {:parse_error, _raw}, new_buffer} ->
         do_consume_events(
           port,
           session,
           on_message,
+          pi_config,
           turn_timeout_ms,
           stall_timeout_ms,
           new_buffer,
           turn_start_ms,
-          last_event_at_ms
+          last_event_at_ms,
+          last_stats_at_ms
         )
 
       {:error, :timeout} ->
@@ -236,6 +299,9 @@ defmodule SymphonyElixir.Pi.RpcBackend do
         turn_elapsed_ms = now_ms - turn_start_ms
 
         cond do
+          port_closed?(port) ->
+            {:error, {:port_exit, :unknown}}
+
           turn_elapsed_ms >= turn_timeout_ms ->
             Logger.warning("Pi RPC turn timeout after #{turn_elapsed_ms}ms")
             {:error, :turn_timeout}
@@ -250,11 +316,13 @@ defmodule SymphonyElixir.Pi.RpcBackend do
               port,
               session,
               on_message,
+              pi_config,
               turn_timeout_ms,
               stall_timeout_ms,
               buffer,
               turn_start_ms,
-              last_event_at_ms
+              last_event_at_ms,
+              last_stats_at_ms
             )
         end
 
@@ -303,22 +371,195 @@ defmodule SymphonyElixir.Pi.RpcBackend do
 
   defp fetch_session_id(%{port: port} = session, pi_config) do
     command = RpcClient.get_state_command(id: @get_state_command_id)
-    :ok = RpcClient.send_command(port, command)
 
-    case RpcClient.await_response(port, @get_state_command_id, pi_config.read_timeout_ms) do
-      {:ok, %{"data" => %{"sessionId" => session_id}}, _events} when is_binary(session_id) ->
-        Logger.info("Pi RPC session_id=#{session_id}")
-        %{session | session_id: session_id}
+    case RpcClient.send_command(port, command) do
+      :ok ->
+        case RpcClient.await_response(port, @get_state_command_id, pi_config.read_timeout_ms) do
+          {:ok, %{"data" => %{"sessionId" => session_id}}, _events} when is_binary(session_id) ->
+            Logger.info("Pi RPC session_id=#{session_id}")
+            %{session | session_id: session_id}
 
-      {:ok, _response, _events} ->
-        Logger.debug("Pi RPC get_state did not return sessionId; using fallback")
-        session
+          {:ok, _response, _events} ->
+            Logger.debug("Pi RPC get_state did not return sessionId; using fallback")
+            session
 
-      {:error, reason} ->
-        Logger.warning("Pi RPC get_state failed: #{inspect(reason)}; continuing without session_id")
+          {:error, reason} ->
+            Logger.warning("Pi RPC get_state failed: #{inspect(reason)}; continuing without session_id")
+            session
+        end
+
+      {:error, :port_closed} ->
+        Logger.warning("Pi RPC get_state failed: port closed; continuing without session_id")
         session
     end
   end
+
+  defp emit_runtime_snapshot(session, on_message, pi_config, opts) do
+    force? = Keyword.get(opts, :force, false)
+    last_stats_at_ms = Keyword.get(opts, :last_stats_at_ms, 0)
+    now_ms = System.monotonic_time(:millisecond)
+
+    if force? or now_ms - last_stats_at_ms >= @stats_poll_interval_ms do
+      case fetch_runtime_snapshot(session, pi_config, on_message) do
+        {:ok, update, updated_session} ->
+          on_message.(update)
+          {:ok, updated_session, now_ms}
+
+        {:terminal, result, updated_session} ->
+          {:terminal, result, updated_session}
+
+        {:error, {:port_exit, status}} ->
+          {:terminal, {:port_exit, status}, session}
+
+        {:error, reason} ->
+          Logger.debug("Pi RPC runtime snapshot unavailable: #{inspect(reason)}")
+          {:ok, session, last_stats_at_ms}
+      end
+    else
+      {:ok, session, last_stats_at_ms}
+    end
+  end
+
+  defp fetch_runtime_snapshot(session, pi_config, on_message) do
+    with {:ok, stats, session} <- fetch_session_stats(session, pi_config, on_message),
+         {:ok, state, session} <- fetch_runtime_state(session, pi_config, on_message) do
+      {:ok, runtime_snapshot_update(stats, state), session}
+    end
+  end
+
+  defp fetch_session_stats(%{port: port} = session, pi_config, on_message) do
+    case RpcClient.send_command(port, RpcClient.get_session_stats_command(id: @get_session_stats_command_id)) do
+      :ok ->
+        case RpcClient.await_response(port, @get_session_stats_command_id, pi_config.read_timeout_ms) do
+          {:ok, %{"data" => data}, events} when is_map(data) ->
+            case forward_runtime_events(events, session, on_message) do
+              :ok -> {:ok, data, session}
+              {:terminal, result} -> {:terminal, result, session}
+            end
+
+          {:ok, response, events} ->
+            case forward_runtime_events(events, session, on_message) do
+              :ok -> {:error, {:unexpected_session_stats_response, response}}
+              {:terminal, result} -> {:terminal, result, session}
+            end
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      {:error, :port_closed} ->
+        {:error, {:port_exit, :unknown}}
+    end
+  end
+
+  defp fetch_runtime_state(%{port: port} = session, pi_config, on_message) do
+    case RpcClient.send_command(port, RpcClient.get_state_command(id: @get_state_snapshot_command_id)) do
+      :ok ->
+        case RpcClient.await_response(port, @get_state_snapshot_command_id, pi_config.read_timeout_ms) do
+          {:ok, %{"data" => data}, events} when is_map(data) ->
+            session = maybe_update_session_id(session, data)
+
+            case forward_runtime_events(events, session, on_message) do
+              :ok -> {:ok, data, session}
+              {:terminal, result} -> {:terminal, result, session}
+            end
+
+          {:ok, response, events} ->
+            case forward_runtime_events(events, session, on_message) do
+              :ok -> {:error, {:unexpected_get_state_response, response}}
+              {:terminal, result} -> {:terminal, result, session}
+            end
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      {:error, :port_closed} ->
+        {:error, {:port_exit, :unknown}}
+    end
+  end
+
+  defp forward_runtime_events(events, session, on_message) when is_list(events) do
+    Enum.reduce_while(events, :ok, fn event, _acc ->
+      normalized = EventNormalizer.normalize(event, normalizer_context(session))
+      on_message.(normalized)
+
+      case classify_terminal_event(event) do
+        nil -> {:cont, :ok}
+        result -> {:halt, {:terminal, result}}
+      end
+    end)
+  end
+
+  defp runtime_snapshot_update(stats, state) do
+    usage =
+      stats
+      |> Map.get("tokens", %{})
+      |> normalize_session_stats_tokens()
+
+    %{
+      event: :runtime_snapshot,
+      timestamp: DateTime.utc_now(),
+      usage: usage,
+      cost_total: get_in(stats, ["cost"]),
+      runtime_state: %{
+        model_id: get_in(state, ["model", "id"]),
+        provider: get_in(state, ["model", "provider"]),
+        context_window: get_in(state, ["model", "contextWindow"]),
+        thinking_level: Map.get(state, "thinkingLevel"),
+        is_streaming: Map.get(state, "isStreaming"),
+        is_compacting: Map.get(state, "isCompacting"),
+        auto_compaction_enabled: Map.get(state, "autoCompactionEnabled"),
+        pending_message_count: Map.get(state, "pendingMessageCount")
+      }
+    }
+  end
+
+  defp normalize_session_stats_tokens(tokens) when is_map(tokens) do
+    %{}
+    |> maybe_put_token("input_tokens", Map.get(tokens, "input"))
+    |> maybe_put_token("output_tokens", Map.get(tokens, "output"))
+    |> maybe_put_token("cache_read_tokens", Map.get(tokens, "cacheRead"))
+    |> maybe_put_token("cache_write_tokens", Map.get(tokens, "cacheWrite"))
+    |> maybe_put_token("total_tokens", Map.get(tokens, "total"))
+  end
+
+  defp normalize_session_stats_tokens(_tokens), do: %{}
+
+  defp maybe_put_token(map, _key, value) when not is_integer(value), do: map
+  defp maybe_put_token(map, key, value), do: Map.put(map, key, value)
+
+  defp maybe_update_session_id(session, %{"sessionId" => session_id}) when is_binary(session_id) do
+    %{session | session_id: session_id}
+  end
+
+  defp maybe_update_session_id(session, _state), do: session
+
+  defp port_closed?(port) when is_port(port), do: :erlang.port_info(port) == :undefined
+
+  defp classify_terminal_event(%{"type" => "agent_end"}), do: :agent_end
+
+  defp classify_terminal_event(%{"type" => "auto_retry_end", "success" => false} = event) do
+    {:turn_failed, Map.get(event, "finalError", "auto-retry exhausted")}
+  end
+
+  defp classify_terminal_event(%{
+         "type" => "message_update",
+         "assistantMessageEvent" => %{"type" => "error"} = ame
+       }) do
+    {:turn_failed, Map.get(ame, "reason", "unknown")}
+  end
+
+  defp classify_terminal_event(_event), do: nil
+
+  defp terminal_result(:agent_end, session),
+    do: {:ok, %{result: :turn_completed, session_id: turn_scoped_session_id(session)}, session}
+
+  defp terminal_result({:turn_failed, reason}, _session),
+    do: {:error, {:turn_failed, reason}}
+
+  defp terminal_result({:port_exit, status}, _session),
+    do: {:error, {:port_exit, status}}
 
   defp start_opts(pi_config, session_dir) do
     opts = [

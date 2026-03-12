@@ -136,6 +136,12 @@ defmodule SymphonyElixir.Pi.RpcClientTest do
     end
   end
 
+  describe "get_session_stats_command/1" do
+    test "builds a get_session_stats command" do
+      assert RpcClient.get_session_stats_command() == %{"type" => "get_session_stats"}
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # build_argv/1
   # ---------------------------------------------------------------------------
@@ -222,6 +228,7 @@ defmodule SymphonyElixir.Pi.RpcClientTest do
       assert function_exported?(RpcClient, :prompt_command, 2)
       assert function_exported?(RpcClient, :abort_command, 1)
       assert function_exported?(RpcClient, :get_state_command, 1)
+      assert function_exported?(RpcClient, :get_session_stats_command, 1)
     end
   end
 end

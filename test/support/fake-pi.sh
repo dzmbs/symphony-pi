@@ -83,6 +83,13 @@ while IFS= read -r line; do
         send "{\"type\":\"response\",\"command\":\"get_state\",\"success\":true,\"data\":{\"isStreaming\":false,\"sessionId\":\"fake-session-1\"}}"
       fi
       ;;
+    get_session_stats)
+      if [ -n "$cmd_id" ]; then
+        send "{\"type\":\"response\",\"command\":\"get_session_stats\",\"success\":true,\"id\":\"$cmd_id\",\"data\":{\"sessionId\":\"fake-session-1\",\"tokens\":{\"input\":500,\"output\":200,\"cacheRead\":100,\"cacheWrite\":50,\"total\":850},\"cost\":0.001}}"
+      else
+        send "{\"type\":\"response\",\"command\":\"get_session_stats\",\"success\":true,\"data\":{\"sessionId\":\"fake-session-1\",\"tokens\":{\"input\":500,\"output\":200,\"cacheRead\":100,\"cacheWrite\":50,\"total\":850},\"cost\":0.001}}"
+      fi
+      ;;
     *)
       log_trace "UNKNOWN_CMD:$cmd_type"
       if [ -n "$cmd_id" ]; then

@@ -95,7 +95,7 @@ defmodule SymphonyElixirWeb.Presenter do
   defp issue_status(_running, _retry), do: "running"
 
   defp running_entry_payload(entry) do
-    %{
+    payload = %{
       issue_id: entry.issue_id,
       issue_identifier: entry.identifier,
       state: entry.state,
@@ -111,6 +111,11 @@ defmodule SymphonyElixirWeb.Presenter do
         total_tokens: entry.runtime_total_tokens
       }
     }
+
+    payload
+    |> maybe_put_cache_tokens(Map.get(entry, :runtime_cache_read_tokens, 0), Map.get(entry, :runtime_cache_write_tokens, 0))
+    |> maybe_put_cost_total(Map.get(entry, :runtime_cost_total, 0.0))
+    |> maybe_put_runtime_details(entry)
   end
 
   defp retry_entry_payload(entry) do
@@ -124,7 +129,7 @@ defmodule SymphonyElixirWeb.Presenter do
   end
 
   defp running_issue_payload(running) do
-    %{
+    payload = %{
       session_id: running.session_id,
       turn_count: Map.get(running, :turn_count, 0),
       state: running.state,
@@ -138,6 +143,11 @@ defmodule SymphonyElixirWeb.Presenter do
         total_tokens: running.runtime_total_tokens
       }
     }
+
+    payload
+    |> maybe_put_cache_tokens(Map.get(running, :runtime_cache_read_tokens, 0), Map.get(running, :runtime_cache_write_tokens, 0))
+    |> maybe_put_cost_total(Map.get(running, :runtime_cost_total, 0.0))
+    |> maybe_put_runtime_details(running)
   end
 
   defp retry_issue_payload(retry) do
@@ -161,6 +171,37 @@ defmodule SymphonyElixirWeb.Presenter do
 
   defp summarize_message(nil), do: nil
   defp summarize_message(message), do: StatusDashboard.humanize_runtime_message(message)
+
+  defp maybe_put_cache_tokens(payload, cache_read, cache_write)
+       when is_integer(cache_read) and cache_read == 0 and is_integer(cache_write) and cache_write == 0,
+       do: payload
+
+  defp maybe_put_cache_tokens(payload, cache_read, cache_write) do
+    put_in(payload, [:tokens, :cache_read_tokens], cache_read || 0)
+    |> put_in([:tokens, :cache_write_tokens], cache_write || 0)
+  end
+
+  defp maybe_put_cost_total(payload, cost_total) when is_number(cost_total) and cost_total > 0, do: Map.put(payload, :cost_total, cost_total)
+  defp maybe_put_cost_total(payload, _cost_total), do: payload
+
+  defp maybe_put_runtime_details(payload, source) do
+    runtime = %{
+      model_id: Map.get(source, :runtime_model_id),
+      provider: Map.get(source, :runtime_provider),
+      context_window: Map.get(source, :runtime_context_window),
+      thinking_level: Map.get(source, :runtime_thinking_level),
+      is_streaming: Map.get(source, :runtime_is_streaming),
+      is_compacting: Map.get(source, :runtime_is_compacting),
+      auto_compaction_enabled: Map.get(source, :runtime_auto_compaction_enabled),
+      pending_message_count: Map.get(source, :runtime_pending_message_count)
+    }
+
+    if Enum.any?(runtime, fn {_key, value} -> not is_nil(value) end) do
+      Map.put(payload, :runtime, runtime)
+    else
+      payload
+    end
+  end
 
   defp due_at_iso8601(due_in_ms) when is_integer(due_in_ms) do
     DateTime.utc_now()

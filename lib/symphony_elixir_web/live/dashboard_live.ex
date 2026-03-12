@@ -93,9 +93,10 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
           <article class="metric-card">
             <p class="metric-label">Total tokens</p>
-            <p class="metric-value numeric"><%= format_int(@payload.runtime_totals.total_tokens) %></p>
+            <p class="metric-value numeric"><%= format_int(runtime_total(@payload.runtime_totals, :total_tokens)) %></p>
             <p class="metric-detail numeric">
-              In <%= format_int(@payload.runtime_totals.input_tokens) %> / Out <%= format_int(@payload.runtime_totals.output_tokens) %>
+              In <%= format_int(runtime_total(@payload.runtime_totals, :input_tokens)) %> / Out <%= format_int(runtime_total(@payload.runtime_totals, :output_tokens)) %>
+              / Cache <%= format_int(runtime_total(@payload.runtime_totals, :cache_read_tokens) + runtime_total(@payload.runtime_totals, :cache_write_tokens)) %>
             </p>
           </article>
 
@@ -109,12 +110,49 @@ defmodule SymphonyElixirWeb.DashboardLive do
         <section class="section-card">
           <div class="section-header">
             <div>
-              <h2 class="section-title">Rate limits</h2>
-              <p class="section-copy">Latest rate-limit snapshot, when available.</p>
+              <h2 class="section-title">Pi runtime details</h2>
+              <p class="section-copy">Live session stats reported directly by Pi RPC.</p>
             </div>
           </div>
 
-          <pre class="code-panel"><%= pretty_value(@payload.rate_limits) %></pre>
+          <%= if @payload.running == [] do %>
+            <p class="empty-state">No active Pi sessions.</p>
+          <% else %>
+            <div class="table-wrap">
+              <table class="data-table" style="min-width: 880px;">
+                <thead>
+                  <tr>
+                    <th>Issue</th>
+                    <th>Model</th>
+                    <th>Status</th>
+                    <th>Cache</th>
+                    <th>Cost</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr :for={entry <- @payload.running}>
+                    <td class="issue-id"><%= entry.issue_identifier %></td>
+                    <td>
+                      <div class="detail-stack">
+                        <span><%= runtime_model_label(Map.get(entry, :runtime, %{})) %></span>
+                        <span class="muted"><%= runtime_context_label(Map.get(entry, :runtime, %{})) %></span>
+                      </div>
+                    </td>
+                    <td>
+                      <div class="detail-stack">
+                        <span><%= runtime_status_label(Map.get(entry, :runtime, %{})) %></span>
+                        <span class="muted"><%= runtime_pending_label(Map.get(entry, :runtime, %{})) %></span>
+                      </div>
+                    </td>
+                    <td class="numeric">
+                      R <%= format_int(token_value(entry.tokens, :cache_read_tokens)) %> / W <%= format_int(token_value(entry.tokens, :cache_write_tokens)) %>
+                    </td>
+                    <td class="numeric"><%= format_money(map_value(entry, :cost_total, 0.0)) %></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          <% end %>
         </section>
 
         <section class="section-card">
@@ -190,13 +228,16 @@ defmodule SymphonyElixirWeb.DashboardLive do
                           <%= if entry.last_event_at do %>
                             · <span class="mono numeric"><%= entry.last_event_at %></span>
                           <% end %>
+                          · <%= runtime_model_label(Map.get(entry, :runtime, %{})) %>
+                          · <%= runtime_status_label(Map.get(entry, :runtime, %{})) %>
                         </span>
                       </div>
                     </td>
                     <td>
                       <div class="token-stack numeric">
-                        <span>Total: <%= format_int(entry.tokens.total_tokens) %></span>
-                        <span class="muted">In <%= format_int(entry.tokens.input_tokens) %> / Out <%= format_int(entry.tokens.output_tokens) %></span>
+                        <span>Total: <%= format_int(token_value(entry.tokens, :total_tokens)) %></span>
+                        <span class="muted">In <%= format_int(token_value(entry.tokens, :input_tokens)) %> / Out <%= format_int(token_value(entry.tokens, :output_tokens)) %></span>
+                        <span class="muted">R <%= format_int(token_value(entry.tokens, :cache_read_tokens)) %> / W <%= format_int(token_value(entry.tokens, :cache_write_tokens)) %> · <%= format_money(map_value(entry, :cost_total, 0.0)) %></span>
                       </div>
                     </td>
                   </tr>
@@ -309,6 +350,55 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
   defp format_int(_value), do: "n/a"
 
+  defp format_money(value) when is_number(value), do: "$" <> :erlang.float_to_binary(value * 1.0, decimals: 3)
+  defp format_money(_value), do: "n/a"
+
+  defp runtime_total(map, key) when is_map(map), do: map_value(map, key, 0)
+  defp runtime_total(_map, _key), do: 0
+
+  defp token_value(tokens, key) when is_map(tokens), do: map_value(tokens, key, 0)
+  defp token_value(_tokens, _key), do: 0
+
+  defp map_value(map, key, default) when is_map(map) do
+    Map.get(map, key, Map.get(map, Atom.to_string(key), default))
+  end
+
+  defp runtime_model_label(%{provider: provider, model_id: model_id, thinking_level: level})
+       when is_binary(provider) and is_binary(model_id) and is_binary(level) do
+    "#{provider}/#{model_id} · #{level}"
+  end
+
+  defp runtime_model_label(%{model_id: model_id, thinking_level: level})
+       when is_binary(model_id) and is_binary(level) do
+    "#{model_id} · #{level}"
+  end
+
+  defp runtime_model_label(%{model_id: model_id}) when is_binary(model_id), do: model_id
+  defp runtime_model_label(_runtime), do: "n/a"
+
+  defp runtime_context_label(%{context_window: context_window, auto_compaction_enabled: auto?})
+       when is_integer(context_window) and context_window > 0 and is_boolean(auto?) do
+    "window #{format_int(context_window)} · auto compact #{if(auto?, do: "on", else: "off")}"
+  end
+
+  defp runtime_context_label(%{context_window: context_window})
+       when is_integer(context_window) and context_window > 0 do
+    "window #{format_int(context_window)}"
+  end
+
+  defp runtime_context_label(_runtime), do: "window n/a"
+
+  defp runtime_status_label(%{is_streaming: true, is_compacting: true}), do: "streaming · compacting"
+  defp runtime_status_label(%{is_streaming: true}), do: "streaming"
+  defp runtime_status_label(%{is_compacting: true}), do: "compacting"
+  defp runtime_status_label(%{is_streaming: false}), do: "idle"
+  defp runtime_status_label(_runtime), do: "status n/a"
+
+  defp runtime_pending_label(%{pending_message_count: count}) when is_integer(count) and count >= 0,
+    do: "pending #{count}"
+
+  defp runtime_pending_label(_runtime), do: "pending n/a"
+
   defp state_badge_class(state) do
     base = "state-badge"
     normalized = state |> to_string() |> String.downcase()
@@ -324,7 +414,4 @@ defmodule SymphonyElixirWeb.DashboardLive do
   defp schedule_runtime_tick do
     Process.send_after(self(), :runtime_tick, @runtime_tick_ms)
   end
-
-  defp pretty_value(nil), do: "n/a"
-  defp pretty_value(value), do: inspect(value, pretty: true, limit: :infinity)
 end
