@@ -1,0 +1,9 @@
+This product includes software derived from OpenAI Symphony.
+
+Upstream attribution:
+Copyright 2025 OpenAI
+
+Licensed under the Apache License, Version 2.0.
+
+This repository contains modifications and additions for Symphony Pi,
+including Pi RPC runtime integration and product-specific documentation.

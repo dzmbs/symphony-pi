@@ -1,0 +1,57 @@
+.PHONY: help all setup deps build fmt fmt-check lint test coverage ci dialyzer e2e
+
+MIX ?= mix
+
+help:
+	@echo "Targets: setup, deps, fmt, fmt-check, lint, test, coverage, dialyzer, e2e, ci"
+
+setup:
+	$(MIX) setup
+
+deps:
+	$(MIX) deps.get
+
+build:
+	$(MIX) build
+
+fmt:
+	$(MIX) format
+
+fmt-check:
+	$(MIX) format --check-formatted
+
+lint:
+	$(MIX) lint
+
+coverage:
+	$(MIX) test --cover
+
+test:
+	$(MIX) test
+
+dialyzer:
+	$(MIX) deps.get
+	$(MIX) dialyzer --format short
+
+e2e:
+	@if [ -z "$$LINEAR_API_KEY" ]; then \
+		echo "LINEAR_API_KEY is required for \`make e2e\`."; \
+		echo "Export it first, for example:"; \
+		echo "  export LINEAR_API_KEY=\$$(tr -d '\\r\\n' < ~/.linear_api_key)"; \
+		exit 1; \
+	fi
+	@if ! command -v "$${SYMPHONY_LIVE_PI_COMMAND:-pi}" >/dev/null 2>&1; then \
+		echo "\`$${SYMPHONY_LIVE_PI_COMMAND:-pi}\` must be on PATH for \`make e2e\`."; \
+		exit 1; \
+	fi
+	SYMPHONY_RUN_LIVE_E2E=1 $(MIX) test test/symphony_elixir/live_e2e_test.exs
+
+ci:
+	$(MAKE) setup
+	$(MAKE) build
+	$(MAKE) fmt-check
+	$(MAKE) lint
+	$(MAKE) coverage
+	$(MAKE) dialyzer
+
+all: ci
