@@ -1,0 +1,17 @@
+{
+  "name": "symphony-pi",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pi skills packaged with Symphony Pi",
+  "license": "Apache-2.0",
+  "keywords": [
+    "pi-package",
+    "symphony",
+    "linear"
+  ],
+  "pi": {
+    "skills": [
+      ".pi/skills"
+    ]
+  }
+}
