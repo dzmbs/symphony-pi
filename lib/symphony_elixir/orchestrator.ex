@@ -193,8 +193,12 @@ defmodule SymphonyElixir.Orchestrator do
         {:noreply, state}
 
       running_entry ->
-        updated = maybe_put_runtime_value(running_entry, :worker_host, runtime_info[:worker_host])
-        {:noreply, %{state | running: Map.put(running, issue_id, updated)}}
+        updated_running_entry =
+          running_entry
+          |> maybe_put_runtime_value(:worker_host, runtime_info[:worker_host])
+          |> maybe_put_runtime_value(:workspace_path, runtime_info[:workspace_path])
+
+        {:noreply, %{state | running: Map.put(running, issue_id, updated_running_entry)}}
     end
   end
 
@@ -706,7 +710,8 @@ defmodule SymphonyElixir.Orchestrator do
             turn_count: 0,
             retry_attempt: normalize_retry_attempt(attempt),
             started_at: DateTime.utc_now(),
-            worker_host: worker_host
+            worker_host: worker_host,
+            workspace_path: nil
           })
 
         %{

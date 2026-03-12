@@ -28,6 +28,44 @@ defmodule SymphonyElixir.CoreTest do
     def stop_session(_session), do: :ok
   end
 
+  defmodule HostFallbackBackend do
+    @behaviour SymphonyElixir.AgentBackend
+
+    @impl true
+    def start_session(_workspace, opts) do
+      worker_host = Keyword.get(opts, :worker_host)
+      send(Keyword.fetch!(opts, :attempt_recipient), {:start_session_attempt, worker_host})
+
+      case worker_host do
+        "worker-a" ->
+          {:error, :backend_unavailable}
+
+        _ ->
+          {:ok,
+           %{
+             worker_host: worker_host,
+             stopped_recipient: Keyword.fetch!(opts, :stopped_recipient)
+           }}
+      end
+    end
+
+    @impl true
+    def run_turn(session, _prompt, _issue, opts) do
+      on_message = Keyword.fetch!(opts, :on_message)
+      on_message.(%{event: :session_started, timestamp: DateTime.utc_now(), session_id: "fallback-turn-1"})
+      on_message.(%{event: :turn_completed, timestamp: DateTime.utc_now(), session_id: "fallback-turn-1"})
+      {:ok, %{result: :turn_completed, session_id: "fallback-turn-1"}, session}
+    end
+
+    @impl true
+    def stop_session(%{stopped_recipient: recipient} = session) do
+      send(recipient, {:host_fallback_backend_stopped, session.worker_host})
+      :ok
+    end
+
+    def stop_session(_session), do: :ok
+  end
+
   test "config defaults and validation checks" do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_api_token: nil,
@@ -1009,5 +1047,69 @@ defmodule SymphonyElixir.CoreTest do
 
     assert_receive {:backend_stopped, stopped_session}, 500
     assert stopped_session.turn_number == 2
+  end
+
+  test "agent runner falls back to the next configured worker host within the same run" do
+    Application.put_env(:symphony_elixir, :backend_module_override, HostFallbackBackend)
+
+    test_root = Path.join(System.tmp_dir!(), "symphony-agent-runner-fallback-#{System.unique_integer([:positive])}")
+    fake_bin_dir = Path.join(test_root, "bin")
+    fake_ssh = Path.join(fake_bin_dir, "ssh")
+    previous_path = System.get_env("PATH")
+
+    on_exit(fn ->
+      Application.delete_env(:symphony_elixir, :backend_module_override)
+      restore_env("PATH", previous_path)
+      File.rm_rf(test_root)
+    end)
+
+    File.mkdir_p!(fake_bin_dir)
+
+    File.write!(
+      fake_ssh,
+      """
+      #!/bin/bash
+      cmd="${@: -1}"
+      eval "$cmd"
+      """
+    )
+
+    File.chmod!(fake_ssh, 0o755)
+    System.put_env("PATH", fake_bin_dir <> ":" <> (previous_path || ""))
+
+    workspace_root = Path.join(test_root, "workspaces")
+    File.mkdir_p!(workspace_root)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      workspace_root: workspace_root,
+      worker_ssh_hosts: ["worker-a", "worker-b"]
+    )
+
+    issue = %Issue{
+      id: "issue-host-fallback",
+      identifier: "MT-1001",
+      title: "Host fallback",
+      description: "Try the next worker when the first backend startup fails",
+      state: "In Progress",
+      url: "https://example.org/issues/MT-1001",
+      labels: []
+    }
+
+    parent = self()
+
+    assert :ok =
+             AgentRunner.run(
+               issue,
+               parent,
+               attempt_recipient: parent,
+               stopped_recipient: parent,
+               issue_state_fetcher: fn [_issue_id] -> {:ok, [%{issue | state: "Done"}]} end
+             )
+
+    assert_receive {:start_session_attempt, "worker-a"}, 1_000
+    assert_receive {:start_session_attempt, "worker-b"}, 1_000
+    assert_receive {:worker_runtime_info, "issue-host-fallback", %{worker_host: "worker-b", workspace_path: workspace}}, 1_000
+    assert workspace =~ "MT-1001"
+    assert_receive {:host_fallback_backend_stopped, "worker-b"}, 1_000
   end
 end
