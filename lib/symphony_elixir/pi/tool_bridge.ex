@@ -2,9 +2,10 @@ defmodule SymphonyElixir.Pi.ToolBridge do
   @moduledoc """
   Local HTTP bridge that serves tool requests from Pi extensions.
 
-  The bridge starts on an ephemeral port and exposes a single endpoint:
+  The bridge starts on an ephemeral port and exposes two endpoints:
 
     POST /linear_graphql
+    POST /sync_workpad
 
   The Pi extension calls this endpoint instead of duplicating Linear auth
   in TypeScript. This keeps auth in Elixir and avoids duplicating tracker
@@ -15,7 +16,7 @@ defmodule SymphonyElixir.Pi.ToolBridge do
 
   require Logger
 
-  alias SymphonyElixir.Linear.Client
+  alias SymphonyElixir.Linear.{Adapter, Client}
 
   plug(Plug.Parsers,
     parsers: [:json],
@@ -49,6 +50,38 @@ defmodule SymphonyElixir.Pi.ToolBridge do
         conn
         |> put_resp_content_type("application/json")
         |> send_resp(400, Jason.encode!(%{success: false, error: "Missing or empty `query` field"}))
+    end
+  end
+
+  post "/sync_workpad" do
+    case conn.body_params do
+      %{"issue_id" => issue_id, "body" => body} = params
+      when is_binary(issue_id) and issue_id != "" and is_binary(body) and body != "" ->
+        result =
+          case Map.get(params, "comment_id") do
+            comment_id when is_binary(comment_id) and comment_id != "" ->
+              Adapter.update_comment(comment_id, body)
+
+            _ ->
+              Adapter.create_comment(issue_id, body)
+          end
+
+        case result do
+          :ok ->
+            conn
+            |> put_resp_content_type("application/json")
+            |> send_resp(200, Jason.encode!(%{success: true}))
+
+          {:error, reason} ->
+            conn
+            |> put_resp_content_type("application/json")
+            |> send_resp(502, Jason.encode!(%{success: false, error: format_error(reason)}))
+        end
+
+      _ ->
+        conn
+        |> put_resp_content_type("application/json")
+        |> send_resp(400, Jason.encode!(%{success: false, error: "Missing required fields: `issue_id` and non-empty `body`"}))
     end
   end
 
@@ -109,5 +142,7 @@ defmodule SymphonyElixir.Pi.ToolBridge do
   defp format_error({:linear_api_status, status}), do: "Linear API returned HTTP #{status}"
   defp format_error({:linear_api_request, reason}), do: "Linear API request failed: #{inspect(reason)}"
   defp format_error(:missing_linear_api_token), do: "Linear API token not configured"
+  defp format_error(:comment_create_failed), do: "Linear comment creation failed"
+  defp format_error(:comment_update_failed), do: "Linear comment update failed"
   defp format_error(reason), do: inspect(reason)
 end

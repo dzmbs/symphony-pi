@@ -12,6 +12,7 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { isToolCallEventType } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
+import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 
@@ -20,6 +21,20 @@ const LINEAR_GRAPHQL_PARAMS = Type.Object({
 	variables: Type.Optional(
 		Type.Record(Type.String(), Type.Unknown(), {
 			description: "Optional GraphQL variables object.",
+		}),
+	),
+});
+
+const SYNC_WORKPAD_PARAMS = Type.Object({
+	issue_id: Type.String({
+		description: "Linear internal issue id for the workpad comment.",
+	}),
+	file_path: Type.String({
+		description: "Path to a local markdown file whose contents become the workpad comment body.",
+	}),
+	comment_id: Type.Optional(
+		Type.String({
+			description: "Existing Linear comment id to update. Omit to create the workpad comment.",
 		}),
 	),
 });
@@ -184,6 +199,75 @@ export default function symphonyExtension(pi: ExtensionAPI) {
 			} catch (err: unknown) {
 				const message = err instanceof Error ? err.message : String(err);
 				throw new Error(`linear_graphql bridge request failed: ${message}`);
+			}
+		},
+	});
+
+	pi.registerTool({
+		name: "sync_workpad",
+		label: "Sync Workpad",
+		description:
+			"Create or update the Linear workpad comment from a local markdown file. " +
+			"Use this to keep large workpad bodies out of the active model context.",
+		promptSnippet: "Sync the current Agent Workpad comment from a file in the workspace",
+		promptGuidelines: [
+			"Write or update the workpad in a local markdown file first, then call sync_workpad.",
+			"Pass the Linear internal issue id as issue_id.",
+			"If updating an existing workpad comment, also pass comment_id.",
+		],
+		parameters: SYNC_WORKPAD_PARAMS,
+
+		async execute(_toolCallId, params, ctx) {
+			if (!bridgeUrl) {
+				throw new Error(
+					"Symphony tool bridge not available. SYMPHONY_TOOL_BRIDGE_URL environment variable is not set.",
+				);
+			}
+
+			const issueId = params.issue_id?.trim();
+			const filePath = params.file_path?.trim();
+			const commentId = params.comment_id?.trim();
+
+			if (!issueId) {
+				throw new Error("sync_workpad requires a non-empty `issue_id`.");
+			}
+
+			if (!filePath) {
+				throw new Error("sync_workpad requires a non-empty `file_path`.");
+			}
+
+			const resolvedPath = normalizeToolPath(filePath, ctx.cwd);
+			const body = (await readFile(resolvedPath, "utf8")).trimEnd();
+
+			if (!body) {
+				throw new Error(`sync_workpad file is empty: ${resolvedPath}`);
+			}
+
+			try {
+				const response = await fetch(`${bridgeUrl}/sync_workpad`, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						issue_id: issueId,
+						body,
+						comment_id: commentId || undefined,
+					}),
+				});
+
+				const bridgeBody = await response.json();
+
+				if (!bridgeBody.success) {
+					const errorMsg = bridgeBody.error || `Bridge returned HTTP ${response.status}`;
+					throw new Error(errorMsg);
+				}
+
+				return {
+					content: [{ type: "text" as const, text: JSON.stringify({ success: true }, null, 2) }],
+					details: { success: true },
+				};
+			} catch (err: unknown) {
+				const message = err instanceof Error ? err.message : String(err);
+				throw new Error(`sync_workpad bridge request failed: ${message}`);
 			}
 		},
 	});

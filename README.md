@@ -33,6 +33,7 @@ Symphony stops the active agent for that issue and cleans up matching workspaces
 3. Decide how your target repo will get Symphony Pi's Pi-native context files:
    - Recommended: install this repo's bundled Pi skills into the target repo with
      `pi install -l git:github.com/dzmbs/symphony-pi`
+   - For guided onboarding, use the bundled `symphony-pi-setup` skill in the target repo after install
    - Alternative: copy `.pi/skills/` into the target repo and adapt the skill text there
    - If you want repo-specific coding rules for interactive Pi sessions, also copy or adapt
      `AGENTS.md`
@@ -78,6 +79,14 @@ Pass a custom workflow file path to `./bin/symphony` when starting the service:
 
 If no path is passed, Symphony defaults to `./WORKFLOW.md`.
 
+Symphony Pi also auto-loads `.env` files from:
+
+- the directory containing the active `WORKFLOW.md`
+- the current working directory
+
+Loaded values only fill missing environment variables; they do not override values already set in
+the shell.
+
 Optional flags:
 
 - `--logs-root` tells Symphony to write logs under a different directory (default: `./log`)
@@ -122,6 +131,9 @@ Notes:
   target repos do not need `.symphony-pi/` in `.gitignore` just to stay clean.
 - `pi.extension_dir` optionally overrides the shipped Symphony Pi extension source. By default,
   Symphony loads its bundled `linear_graphql` extension automatically.
+- The bundled extension also provides `sync_workpad`, which updates the Linear workpad comment
+  from a local markdown file so large workpad bodies do not need to be pasted back into model
+  context every turn.
 - Symphony Pi applies a default extension safety policy during orchestrated runs:
   - blocks obviously dangerous bash commands such as `rm -rf`, `sudo`, `mkfs`, and `dd ... of=`
   - blocks writes outside the current workspace
@@ -179,6 +191,7 @@ This repo ships:
 - `AGENTS.md` for contributor and agent rules
 - `.pi/skills/` for Pi-native skill definitions
 - `.pi/extensions/symphony/index.ts` for the development copy of the `linear_graphql` extension used by Symphony Pi
+- `.pi/skills/symphony-pi-setup/` for guided onboarding into another repo
 
 The runtime service itself loads the bundled extension source from `priv/pi/extensions/symphony/`
 when launching Pi in orchestration mode. Installing the Pi package from this repo is mainly for

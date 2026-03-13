@@ -11,6 +11,8 @@ Use this skill for raw Linear operations during a Symphony Pi session.
 
 Prefer `linear_graphql` when Symphony Pi is managing the agent session. Symphony Pi injects that tool automatically for orchestrated runs and it reuses the service’s configured Linear credentials.
 
+Prefer `sync_workpad` for large workpad comment updates. It lets the agent write the workpad to a local file and then create or update the Linear comment without pasting the full body back into prompt context.
+
 If `linear_graphql` is unavailable, fall back to a configured Linear MCP server if the environment provides one.
 
 ## Tool input

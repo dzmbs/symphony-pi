@@ -245,6 +245,22 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert {:error, :comment_create_failed} = Adapter.create_comment("issue-1", "odd")
 
     Process.put(
+      {FakeLinearClient, :graphql_result},
+      {:ok, %{"data" => %{"commentUpdate" => %{"success" => true}}}}
+    )
+
+    assert :ok = Adapter.update_comment("comment-1", "updated")
+    assert_receive {:graphql_called, update_comment_query, %{body: "updated", commentId: "comment-1"}}
+    assert update_comment_query =~ "commentUpdate"
+
+    Process.put(
+      {FakeLinearClient, :graphql_result},
+      {:ok, %{"data" => %{"commentUpdate" => %{"success" => false}}}}
+    )
+
+    assert {:error, :comment_update_failed} = Adapter.update_comment("comment-1", "broken")
+
+    Process.put(
       {FakeLinearClient, :graphql_results},
       [
         {:ok,

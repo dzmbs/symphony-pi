@@ -11,6 +11,7 @@ defmodule SymphonyElixir.CLI do
   @type ensure_started_result :: {:ok, [atom()]} | {:error, term()}
   @type deps :: %{
           file_regular?: (String.t() -> boolean()),
+          load_dotenv: (String.t() -> :ok),
           set_workflow_file_path: (String.t() -> :ok | {:error, term()}),
           set_logs_root: (String.t() -> :ok | {:error, term()}),
           set_server_port_override: (non_neg_integer() | nil -> :ok | {:error, term()}),
@@ -56,6 +57,7 @@ defmodule SymphonyElixir.CLI do
     expanded_path = Path.expand(workflow_path)
 
     if deps.file_regular?.(expanded_path) do
+      :ok = deps.load_dotenv.(expanded_path)
       :ok = deps.set_workflow_file_path.(expanded_path)
 
       case deps.ensure_all_started.() do
@@ -79,11 +81,76 @@ defmodule SymphonyElixir.CLI do
   defp runtime_deps do
     %{
       file_regular?: &File.regular?/1,
+      load_dotenv: &load_dotenv_for_workflow/1,
       set_workflow_file_path: &SymphonyElixir.Workflow.set_workflow_file_path/1,
       set_logs_root: &set_logs_root/1,
       set_server_port_override: &set_server_port_override/1,
       ensure_all_started: fn -> Application.ensure_all_started(:symphony_elixir) end
     }
+  end
+
+  @doc false
+  @spec load_dotenv_for_workflow(String.t()) :: :ok
+  def load_dotenv_for_workflow(workflow_path) when is_binary(workflow_path) do
+    workflow_dir = workflow_path |> Path.dirname() |> Path.expand()
+    cwd = File.cwd!() |> Path.expand()
+
+    [Path.join(workflow_dir, ".env"), Path.join(cwd, ".env")]
+    |> Enum.uniq()
+    |> Enum.each(&load_dotenv_file/1)
+
+    :ok
+  end
+
+  defp load_dotenv_file(path) when is_binary(path) do
+    case File.read(path) do
+      {:ok, body} ->
+        body
+        |> String.split("\n")
+        |> Enum.each(&load_dotenv_line/1)
+
+      {:error, _reason} ->
+        :ok
+    end
+  end
+
+  defp load_dotenv_line(raw_line) when is_binary(raw_line) do
+    line = String.trim(raw_line)
+
+    cond do
+      line == "" ->
+        :ok
+
+      String.starts_with?(line, "#") ->
+        :ok
+
+      true ->
+        case String.split(line, "=", parts: 2) do
+          [raw_key, raw_value] ->
+            key = String.trim(raw_key)
+            value = raw_value |> String.trim() |> trim_matching_quotes()
+
+            if key != "" and System.get_env(key) in [nil, ""] do
+              System.put_env(key, value)
+            end
+
+          _ ->
+            :ok
+        end
+    end
+  end
+
+  defp trim_matching_quotes(value) when is_binary(value) do
+    cond do
+      String.length(value) >= 2 and String.starts_with?(value, "\"") and String.ends_with?(value, "\"") ->
+        String.slice(value, 1, String.length(value) - 2)
+
+      String.length(value) >= 2 and String.starts_with?(value, "'") and String.ends_with?(value, "'") ->
+        String.slice(value, 1, String.length(value) - 2)
+
+      true ->
+        value
+    end
   end
 
   defp maybe_set_logs_root(opts, deps) do
