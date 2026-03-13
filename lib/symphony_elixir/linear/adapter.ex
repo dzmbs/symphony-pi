@@ -23,6 +23,20 @@ defmodule SymphonyElixir.Linear.Adapter do
   }
   """
 
+  @workpad_comment_query """
+  query SymphonyFindWorkpadComment($issueId: String!) {
+    issue(id: $issueId) {
+      comments(first: 50) {
+        nodes {
+          id
+          body
+          resolvedAt
+        }
+      }
+    }
+  }
+  """
+
   @update_state_mutation """
   mutation SymphonyUpdateIssueState($issueId: String!, $stateId: String!) {
     issueUpdate(id: $issueId, input: {stateId: $stateId}) {
@@ -78,6 +92,20 @@ defmodule SymphonyElixir.Linear.Adapter do
     end
   end
 
+  @spec find_workpad_comment_id(String.t()) :: {:ok, String.t() | nil} | {:error, term()}
+  def find_workpad_comment_id(issue_id) when is_binary(issue_id) do
+    case client_module().graphql(@workpad_comment_query, %{issueId: issue_id}) do
+      {:ok, response} ->
+        {:ok, response |> get_in(["data", "issue", "comments", "nodes"]) |> extract_workpad_comment_id()}
+
+      {:error, reason} ->
+        {:error, reason}
+
+      _ ->
+        {:error, :comment_lookup_failed}
+    end
+  end
+
   @spec update_issue_state(String.t(), String.t()) :: :ok | {:error, term()}
   def update_issue_state(issue_id, state_name)
       when is_binary(issue_id) and is_binary(state_name) do
@@ -108,4 +136,22 @@ defmodule SymphonyElixir.Linear.Adapter do
       _ -> {:error, :state_not_found}
     end
   end
+
+  defp extract_workpad_comment_id(comments) when is_list(comments) do
+    comments
+    |> Enum.find_value(fn
+      %{"id" => id, "body" => body, "resolvedAt" => resolved_at}
+      when is_binary(id) and is_binary(body) ->
+        if resolved_at in [nil, ""] and String.starts_with?(body, "## Agent Workpad"), do: id
+
+      %{id: id, body: body, resolvedAt: resolved_at}
+      when is_binary(id) and is_binary(body) ->
+        if resolved_at in [nil, ""] and String.starts_with?(body, "## Agent Workpad"), do: id
+
+      _ ->
+        nil
+    end)
+  end
+
+  defp extract_workpad_comment_id(_comments), do: nil
 end

@@ -9,7 +9,20 @@ defmodule SymphonyElixir.Pi.ToolBridgeTest do
         send(recipient, {:graphql_called, query, variables})
       end
 
-      Application.get_env(:symphony_elixir, __MODULE__)[:graphql_result] || {:ok, %{"data" => %{}}}
+      case Application.get_env(:symphony_elixir, __MODULE__)[:graphql_results] do
+        [result | rest] ->
+          Application.put_env(
+            :symphony_elixir,
+            __MODULE__,
+            Application.get_env(:symphony_elixir, __MODULE__)
+            |> Keyword.put(:graphql_results, rest)
+          )
+
+          result
+
+        _ ->
+          Application.get_env(:symphony_elixir, __MODULE__)[:graphql_result] || {:ok, %{"data" => %{}}}
+      end
     end
   end
 
@@ -94,7 +107,10 @@ defmodule SymphonyElixir.Pi.ToolBridgeTest do
         :symphony_elixir,
         FakeLinearClient,
         recipient: self(),
-        graphql_result: {:ok, %{"data" => %{"commentCreate" => %{"success" => true}}}}
+        graphql_results: [
+          {:ok, %{"data" => %{"issue" => %{"comments" => %{"nodes" => []}}}}},
+          {:ok, %{"data" => %{"commentCreate" => %{"success" => true}}}}
+        ]
       )
 
       {:ok, pid, port} = ToolBridge.start_link()
@@ -107,6 +123,8 @@ defmodule SymphonyElixir.Pi.ToolBridgeTest do
 
       assert resp.status == 200
       assert resp.body["success"] == true
+      assert_receive {:graphql_called, lookup_query, %{issueId: "issue-1"}}
+      assert lookup_query =~ "comments(first: 50)"
       assert_receive {:graphql_called, query, %{body: "## Agent Workpad\nbody", issueId: "issue-1"}}
       assert query =~ "commentCreate"
 
@@ -135,6 +153,48 @@ defmodule SymphonyElixir.Pi.ToolBridgeTest do
       assert resp.body["success"] == true
       assert_receive {:graphql_called, query, %{body: "updated", commentId: "comment-1"}}
       assert query =~ "commentUpdate"
+
+      ToolBridge.stop(pid)
+    end
+
+    test "sync_workpad auto-updates the existing Agent Workpad comment when comment_id is omitted" do
+      write_workflow_file!(SymphonyElixir.Workflow.workflow_file_path())
+
+      Application.put_env(
+        :symphony_elixir,
+        FakeLinearClient,
+        recipient: self(),
+        graphql_results: [
+          {:ok,
+           %{
+             "data" => %{
+               "issue" => %{
+                 "comments" => %{
+                   "nodes" => [
+                     %{"id" => "comment-7", "body" => "## Agent Workpad\nold body", "resolvedAt" => nil}
+                   ]
+                 }
+               }
+             }
+           }},
+          {:ok, %{"data" => %{"commentUpdate" => %{"success" => true}}}}
+        ]
+      )
+
+      {:ok, pid, port} = ToolBridge.start_link()
+
+      {:ok, resp} =
+        Req.post("http://127.0.0.1:#{port}/sync_workpad",
+          json: %{"issue_id" => "issue-1", "body" => "## Agent Workpad\nnew body"},
+          headers: [{"content-type", "application/json"}]
+        )
+
+      assert resp.status == 200
+      assert resp.body["success"] == true
+      assert_receive {:graphql_called, lookup_query, %{issueId: "issue-1"}}
+      assert lookup_query =~ "comments(first: 50)"
+      assert_receive {:graphql_called, update_query, %{body: "## Agent Workpad\nnew body", commentId: "comment-7"}}
+      assert update_query =~ "commentUpdate"
 
       ToolBridge.stop(pid)
     end

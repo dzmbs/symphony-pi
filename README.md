@@ -133,7 +133,8 @@ Notes:
   Symphony loads its bundled `linear_graphql` extension automatically.
 - The bundled extension also provides `sync_workpad`, which updates the Linear workpad comment
   from a local markdown file so large workpad bodies do not need to be pasted back into model
-  context every turn.
+  context every turn. If the current `## Agent Workpad` comment already exists, Symphony Pi will
+  update it automatically; otherwise it creates one.
 - Symphony Pi applies a default extension safety policy during orchestrated runs:
   - blocks obviously dangerous bash commands such as `rm -rf`, `sudo`, `mkfs`, and `dd ... of=`
   - blocks writes outside the current workspace

@@ -125,18 +125,27 @@ defmodule SymphonyElixir.CLI do
         :ok
 
       true ->
-        case String.split(line, "=", parts: 2) do
-          [raw_key, raw_value] ->
-            key = String.trim(raw_key)
-            value = raw_value |> String.trim() |> trim_matching_quotes()
+        load_dotenv_assignment(line)
+    end
+  end
 
-            if key != "" and System.get_env(key) in [nil, ""] do
-              System.put_env(key, value)
-            end
+  defp load_dotenv_assignment(line) when is_binary(line) do
+    case String.split(line, "=", parts: 2) do
+      [raw_key, raw_value] ->
+        key = String.trim(raw_key)
+        value = raw_value |> String.trim() |> trim_matching_quotes()
+        maybe_put_dotenv_env(key, value)
 
-          _ ->
-            :ok
-        end
+      _ ->
+        :ok
+    end
+  end
+
+  defp maybe_put_dotenv_env("", _value), do: :ok
+
+  defp maybe_put_dotenv_env(key, value) when is_binary(key) and is_binary(value) do
+    if System.get_env(key) in [nil, ""] do
+      System.put_env(key, value)
     end
   end
 

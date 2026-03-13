@@ -34,7 +34,8 @@ const SYNC_WORKPAD_PARAMS = Type.Object({
 	}),
 	comment_id: Type.Optional(
 		Type.String({
-			description: "Existing Linear comment id to update. Omit to create the workpad comment.",
+			description:
+				"Existing Linear comment id to update. Omit to auto-update the current Agent Workpad comment when found, otherwise create one.",
 		}),
 	),
 });
@@ -213,7 +214,7 @@ export default function symphonyExtension(pi: ExtensionAPI) {
 		promptGuidelines: [
 			"Write or update the workpad in a local markdown file first, then call sync_workpad.",
 			"Pass the Linear internal issue id as issue_id.",
-			"If updating an existing workpad comment, also pass comment_id.",
+			"Pass comment_id when you already know the exact Linear comment id; otherwise Symphony Pi will try to find the current Agent Workpad comment automatically.",
 		],
 		parameters: SYNC_WORKPAD_PARAMS,
 

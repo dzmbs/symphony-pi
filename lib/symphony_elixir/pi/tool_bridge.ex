@@ -58,12 +58,12 @@ defmodule SymphonyElixir.Pi.ToolBridge do
       %{"issue_id" => issue_id, "body" => body} = params
       when is_binary(issue_id) and issue_id != "" and is_binary(body) and body != "" ->
         result =
-          case Map.get(params, "comment_id") do
-            comment_id when is_binary(comment_id) and comment_id != "" ->
+          with {:ok, comment_id} <- resolve_workpad_comment_id(issue_id, Map.get(params, "comment_id")) do
+            if is_binary(comment_id) and comment_id != "" do
               Adapter.update_comment(comment_id, body)
-
-            _ ->
+            else
               Adapter.create_comment(issue_id, body)
+            end
           end
 
         case result do
@@ -142,7 +142,17 @@ defmodule SymphonyElixir.Pi.ToolBridge do
   defp format_error({:linear_api_status, status}), do: "Linear API returned HTTP #{status}"
   defp format_error({:linear_api_request, reason}), do: "Linear API request failed: #{inspect(reason)}"
   defp format_error(:missing_linear_api_token), do: "Linear API token not configured"
+  defp format_error(:comment_lookup_failed), do: "Linear workpad comment lookup failed"
   defp format_error(:comment_create_failed), do: "Linear comment creation failed"
   defp format_error(:comment_update_failed), do: "Linear comment update failed"
   defp format_error(reason), do: inspect(reason)
+
+  defp resolve_workpad_comment_id(_issue_id, comment_id)
+       when is_binary(comment_id) and comment_id != "" do
+    {:ok, comment_id}
+  end
+
+  defp resolve_workpad_comment_id(issue_id, _comment_id) when is_binary(issue_id) do
+    Adapter.find_workpad_comment_id(issue_id)
+  end
 end

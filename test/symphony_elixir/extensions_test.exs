@@ -261,6 +261,36 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert {:error, :comment_update_failed} = Adapter.update_comment("comment-1", "broken")
 
     Process.put(
+      {FakeLinearClient, :graphql_result},
+      {:ok,
+       %{
+         "data" => %{
+           "issue" => %{
+             "comments" => %{
+               "nodes" => [
+                 %{"id" => "comment-1", "body" => "## Agent Workpad\nactive", "resolvedAt" => nil},
+                 %{"id" => "comment-2", "body" => "## Agent Workpad\nresolved", "resolvedAt" => "2026-03-13T00:00:00Z"},
+                 %{"id" => "comment-3", "body" => "other", "resolvedAt" => nil}
+               ]
+             }
+           }
+         }
+       }}
+    )
+
+    assert {:ok, "comment-1"} = Adapter.find_workpad_comment_id("issue-1")
+
+    Process.put(
+      {FakeLinearClient, :graphql_result},
+      {:ok, %{"data" => %{"issue" => %{"comments" => %{"nodes" => [%{"id" => "comment-9", "body" => "other", "resolvedAt" => nil}]}}}}}
+    )
+
+    assert {:ok, nil} = Adapter.find_workpad_comment_id("issue-1")
+
+    Process.put({FakeLinearClient, :graphql_result}, {:error, :boom})
+    assert {:error, :boom} = Adapter.find_workpad_comment_id("issue-1")
+
+    Process.put(
       {FakeLinearClient, :graphql_results},
       [
         {:ok,
