@@ -17,9 +17,7 @@ jobs:
         include:
           - runs_on: ubuntu-latest
             suffix: linux-x64
-          - runs_on: macos-13
-            suffix: darwin-x64
-          - runs_on: macos-14
+          - runs_on: macos-latest
             suffix: darwin-arm64
 
     runs-on: ${{ matrix.runs_on }}
