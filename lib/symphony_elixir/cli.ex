@@ -279,11 +279,19 @@ defmodule SymphonyElixir.CLI do
 
   defp auto_review_override(opts) do
     case {
-      List.last(Keyword.get_values(opts, :auto_review)),
+      auto_review_value(opts),
       List.last(Keyword.get_values(opts, :no_auto_review))
     } do
       {true, _} -> true
       {_, true} -> false
+      {false, _} -> false
+      _ -> nil
+    end
+  end
+
+  defp auto_review_value(opts) do
+    case List.last(Keyword.get_values(opts, :auto_review)) do
+      value when value in [true, false] -> value
       _ -> nil
     end
   end
