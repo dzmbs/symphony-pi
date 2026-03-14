@@ -1290,6 +1290,13 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
   end
 
   test "application stop renders offline status" do
+    on_exit(fn ->
+      case Application.ensure_all_started(:symphony_elixir) do
+        {:ok, _started} -> :ok
+        {:error, {:already_started, _app}} -> :ok
+      end
+    end)
+
     rendered =
       ExUnit.CaptureIO.capture_io(fn ->
         assert :ok = SymphonyElixir.Application.stop(:normal)
