@@ -15,8 +15,15 @@ If the terminal `symphony` CLI is available, prefer:
 
 That command is the recommended onboarding path because it:
 
-- checks that `pi` is installed
+- prompts for `LINEAR_API_KEY` when missing and can save it to repo `.env`
+- checks that `pi` is installed and offers to install it when missing
 - fetches the real available models from Pi
+- checks that the chosen Pi providers are authenticated before writing `WORKFLOW.md`
+  - API-key providers can be filled during setup and saved to repo `.env`
+  - OAuth providers are re-checked after `pi` -> `/login <provider>`
+- tries to fetch Linear projects and lets you pick one interactively when that works
+- falls back to manual project slug entry and shows the fetch error when that does not
+- validates required Linear states when the project can be resolved
 - installs the project-local Symphony Pi package
 - writes `WORKFLOW.md`
 - optionally writes a minimal `AGENTS.md`
@@ -28,11 +35,14 @@ adjust the generated files afterward.
 
 Run these first and stop if any fail:
 
-1. `pi --version`
-2. `gh auth status`
-3. `ssh -T git@github.com` if the target repo uses SSH
-4. `test -n "$LINEAR_API_KEY" && echo set || echo missing`
-5. `git remote get-url origin` inside the target repo
+1. `gh auth status`
+2. `ssh -T git@github.com` if the target repo uses SSH
+3. `git remote get-url origin` inside the target repo
+
+Notes:
+
+- `./bin/symphony setup` can prompt for `LINEAR_API_KEY`; it does not have to be pre-exported.
+- If `pi` is missing, `./bin/symphony setup` can offer to install it.
 
 ## Install Symphony Pi
 

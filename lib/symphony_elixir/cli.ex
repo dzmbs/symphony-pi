@@ -22,6 +22,7 @@ defmodule SymphonyElixir.CLI do
   @type ensure_started_result :: {:ok, [atom()]} | {:error, term()}
   @type deps :: %{
           file_regular?: (String.t() -> boolean()),
+          file_dir?: (String.t() -> boolean()),
           load_dotenv: (String.t() -> :ok),
           set_workflow_file_path: (String.t() -> :ok | {:error, term()}),
           set_runtime_overrides: (map() -> :ok),
@@ -36,7 +37,11 @@ defmodule SymphonyElixir.CLI do
   def main(args) do
     case evaluate(args) do
       :ok ->
-        wait_for_shutdown()
+        if setup_command?(args) do
+          System.halt(0)
+        else
+          wait_for_shutdown()
+        end
 
       {:error, message} ->
         IO.puts(:stderr, message)
@@ -54,6 +59,9 @@ defmodule SymphonyElixir.CLI do
         evaluate_run_command(args, deps)
     end
   end
+
+  defp setup_command?(["setup", _repo_path]), do: true
+  defp setup_command?(_args), do: false
 
   defp evaluate_run_command(args, deps) do
     case OptionParser.parse(args, strict: @switches) do
@@ -80,7 +88,7 @@ defmodule SymphonyElixir.CLI do
 
   @spec run(String.t(), deps()) :: :ok | {:error, String.t()}
   def run(workflow_path, deps) do
-    expanded_path = Path.expand(workflow_path)
+    expanded_path = resolve_workflow_path(Path.expand(workflow_path), deps)
 
     case deps.file_regular?.(expanded_path) do
       true ->
@@ -91,7 +99,7 @@ defmodule SymphonyElixir.CLI do
         end
 
       false ->
-        {:error, "Workflow file not found: #{expanded_path}"}
+        {:error, workflow_not_found_message(Path.expand(workflow_path), expanded_path, deps)}
     end
   end
 
@@ -104,6 +112,7 @@ defmodule SymphonyElixir.CLI do
   defp runtime_deps do
     %{
       file_regular?: &File.regular?/1,
+      file_dir?: &File.dir?/1,
       load_dotenv: &load_dotenv_for_workflow/1,
       set_workflow_file_path: &Workflow.set_workflow_file_path/1,
       set_runtime_overrides: &SymphonyElixir.Config.set_runtime_overrides/1,
@@ -113,6 +122,32 @@ defmodule SymphonyElixir.CLI do
       set_server_port_override: &set_server_port_override/1,
       ensure_all_started: fn -> Application.ensure_all_started(:symphony_elixir) end
     }
+  end
+
+  defp resolve_workflow_path(expanded_path, deps) do
+    if deps.file_dir?.(expanded_path) do
+      Path.join(expanded_path, "WORKFLOW.md")
+    else
+      expanded_path
+    end
+  end
+
+  defp workflow_not_found_message(original_path, resolved_path, deps) do
+    if deps.file_dir?.(original_path) do
+      [
+        "No `WORKFLOW.md` found in repo: #{original_path}",
+        "",
+        "Start with setup:",
+        "  symphony setup #{original_path}",
+        "",
+        "Then run Symphony against the generated workflow file:",
+        "  symphony #{Path.join(original_path, "WORKFLOW.md")} " <>
+          "--i-understand-that-this-will-be-running-without-the-usual-guardrails"
+      ]
+      |> Enum.join("\n")
+    else
+      "Workflow file not found: #{resolved_path}"
+    end
   end
 
   defp ensure_workflow_started(expanded_path, deps) do

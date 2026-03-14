@@ -36,15 +36,21 @@ mise install
 mise exec -- mix setup
 mise exec -- mix build
 
-export LINEAR_API_KEY=...
 ./bin/symphony setup /path/to/your-repo
 ```
 
 The setup command does the first-pass onboarding for you:
 
 - checks that the target path is a git repo with an `origin`
-- checks that `pi` is installed and fails early if it is missing
+- prompts for `LINEAR_API_KEY` if it is missing and can save it to the repo `.env`
+- checks that `pi` is installed and offers to install it when it is missing
 - fetches the actual available models from your local Pi installation
+- checks that the chosen Pi providers are actually authenticated before writing `WORKFLOW.md`
+  - API-key providers can be filled in during setup and saved to repo `.env`
+  - OAuth providers are re-checked after you complete `pi` -> `/login <provider>`
+- tries to fetch Linear projects and lets you pick one interactively when that succeeds
+- falls back to manual project slug entry with the fetch error shown when it does not
+- validates required Linear states when the project can be resolved
 - installs the Symphony Pi project-local Pi package into the target repo
 - writes a working `WORKFLOW.md`
 - optionally creates a minimal `AGENTS.md`
@@ -57,8 +63,8 @@ project, move it to `Todo`, and watch the dashboard at `http://127.0.0.1:4050`.
 
 1. Make sure your codebase is set up to work well with agents: see
    [Harness engineering](https://openai.com/index/harness-engineering/).
-2. Get a new personal token in Linear via Settings → Security & access → Personal API keys, and
-   set it as the `LINEAR_API_KEY` environment variable.
+2. Get a new personal token in Linear via Settings → Security & access → Personal API keys.
+   If `LINEAR_API_KEY` is not already set, `./bin/symphony setup` will prompt for it.
 3. Run onboarding:
 
 ```bash
@@ -66,8 +72,6 @@ project, move it to `Todo`, and watch the dashboard at `http://127.0.0.1:4050`.
 ```
 
 4. Customize the generated `WORKFLOW.md` only if your project needs something beyond the detected defaults.
-   - To get your project's slug, right-click the project and copy its URL. The slug is part of the
-     URL.
    - When creating a workflow based on this repo, note that it depends on non-standard Linear
      issue statuses: "Rework", "Human Review", and "Merging". You can customize them in
      Team Settings → Workflow in Linear.
@@ -131,6 +135,9 @@ Optional flags:
 - `--no-auto-review` temporarily disables `auto_review`
 - `--review-model` temporarily overrides `auto_review.model`
 - `--review-thinking` temporarily overrides `auto_review.thinking`
+
+If you pass a repo path instead of a workflow file path and that repo does not contain
+`WORKFLOW.md`, Symphony Pi will tell you to run `./bin/symphony setup /path/to/repo` first.
 
 The `WORKFLOW.md` file uses YAML front matter for configuration, plus a Markdown body used as the
 agent session prompt.
