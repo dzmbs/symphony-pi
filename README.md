@@ -91,6 +91,12 @@ Optional flags:
 
 - `--logs-root` tells Symphony to write logs under a different directory (default: `./log`)
 - `--port` also starts the Phoenix observability service (default: disabled)
+- `--pi-model` temporarily overrides `pi.model` for this Symphony Pi process
+- `--pi-thinking` temporarily overrides `pi.thinking` for this Symphony Pi process
+- `--auto-review` temporarily enables `auto_review`
+- `--no-auto-review` temporarily disables `auto_review`
+- `--review-model` temporarily overrides `auto_review.model`
+- `--review-thinking` temporarily overrides `auto_review.thinking`
 
 The `WORKFLOW.md` file uses YAML front matter for configuration, plus a Markdown body used as the
 agent session prompt.
@@ -106,7 +112,7 @@ workspace:
   root: ~/code/workspaces
 hooks:
   after_create: |
-    git clone git@github.com:your-org/your-repo.git .
+    git clone --depth 1 "$SOURCE_REPO_URL" .
 agent:
   max_concurrent_agents: 10
   max_turns: 20
@@ -131,6 +137,19 @@ Notes:
   target repos do not need `.symphony-pi/` in `.gitignore` just to stay clean.
 - `pi.extension_dir` optionally overrides the shipped Symphony Pi extension source. By default,
   Symphony loads its bundled `linear_graphql` extension automatically.
+- `auto_review` is optional and disabled by default.
+- When enabled, Symphony Pi runs a fresh review pass after the issue is
+  moved to `Human Review`. If the reviewer asks for changes, Symphony Pi moves the issue back to
+  `Rework`, performs a focused rework pass, and can review again before final handoff.
+- `auto_review.model` and `auto_review.thinking` override the base `pi` runtime for the review
+  stage only. Configured implementation and review models are validated against the local `pi`
+  installation at CLI startup.
+- `auto_review.max_rework_passes` limits how many automated fix/review loops Symphony Pi will do
+  before leaving the issue in `Rework`.
+- CLI runtime overrides take precedence over `WORKFLOW.md` for the current process only. This is
+  useful for experimentation or one-off higher-quality runs without editing committed workflow files.
+- The review stage uses a fresh Pi session by default and a restricted review tool profile instead
+  of a full-power implementation session.
 - The bundled extension also provides `sync_workpad`, which updates the Linear workpad comment
   from a local markdown file so large workpad bodies do not need to be pasted back into model
   context every turn. If the current `## Agent Workpad` comment already exists, Symphony Pi will
@@ -197,6 +216,48 @@ This repo ships:
 The runtime service itself loads the bundled extension source from `priv/pi/extensions/symphony/`
 when launching Pi in orchestration mode. Installing the Pi package from this repo is mainly for
 sharing the skills, not for injecting the runtime bridge into unrelated interactive sessions.
+
+## Optional Auto Review
+
+By default, Symphony Pi runs this flow:
+
+- pick a Linear issue
+- implement and validate
+- hand off to `Human Review`
+
+That default flow uses the implementation runtime configured under `pi:` in `WORKFLOW.md`.
+
+If you want an extra internal quality gate before the human sees the handoff, enable
+`auto_review` in `WORKFLOW.md`:
+
+```yaml
+auto_review:
+  enabled: true
+  model: openai/gpt-5
+  thinking: medium
+  max_rework_passes: 1
+  fresh_session: true
+```
+
+Behavior:
+
+- implementation still runs with the base `pi` config
+- once work reaches `Human Review`, Symphony Pi runs a fresh internal review pass
+- if review passes, the ticket stays in `Human Review`
+- if review requests changes, Symphony Pi moves the ticket to `Rework`, performs a focused rework pass, and can review again
+- the review verdict currently drives Symphony Pi's internal `Rework`/`Human Review` loop; it does
+  not yet post formal GitHub PR review comments on your behalf
+
+If you want to experiment without editing `WORKFLOW.md`, use process-level overrides:
+
+```bash
+./bin/symphony /path/to/WORKFLOW.md \
+  --pi-model anthropic/claude-opus-4-6 \
+  --auto-review \
+  --review-model openai/gpt-5
+```
+
+Those flags only affect the current Symphony Pi process.
 
 ## Runtime Safety
 
@@ -289,13 +350,17 @@ live test targets a real host with `pi` installed.
 
 ## Git Auth
 
-Symphony Pi works best when repository workspaces use SSH remotes end to end:
+The clean default is to let Symphony Pi preserve whatever remote style the target repo already
+uses:
 
-- authenticate normal `git` operations with GitHub SSH keys
-- use SSH clone URLs in `hooks.after_create`
-- let workspace pushes use `git@github.com:...` instead of HTTPS
+- use `git clone --depth 1 "$SOURCE_REPO_URL" .` in `hooks.after_create`
+- Symphony Pi injects `SOURCE_REPO_URL`, `SOURCE_REPO_SSH_URL`, and `SOURCE_REPO_HTTPS_URL`
+- workspaces inherit the target repo's current `origin` instead of hardcoding a separate clone URL
 
-This avoids HTTPS credential drift inside per-issue workspaces and is the recommended setup.
+If your target repo already uses SSH, that remains the best unattended push/PR setup because it
+avoids HTTPS credential drift inside per-issue workspaces. If the repo uses HTTPS, Symphony Pi
+will preserve that too; you no longer need to rewrite workspace remotes manually just to match the
+bootstrap clone.
 
 The live test creates a temporary Linear project and issue, writes a temporary `WORKFLOW.md`,
 runs a real agent turn, verifies the workspace side effect, requires Pi to comment on and close

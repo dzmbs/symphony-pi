@@ -46,6 +46,13 @@ Update at least:
 - `tracker.project_slug`
 - `workspace.root`
 - `hooks.after_create`
+- `pi.model` / `pi.thinking` if you want a non-default implementation model
+
+Optional:
+
+- add `auto_review` only if you want an internal review pass before human handoff
+- otherwise leave it out and keep the default flow: implement, validate, hand off to `Human Review`
+- use CLI runtime overrides when you want to experiment for one run without editing the committed workflow
 
 Preferred bootstrap hook:
 
@@ -61,6 +68,23 @@ Why:
 - `SOURCE_REPO_URL` is injected by Symphony Pi
 - it preserves whether the target repo itself uses SSH or HTTPS
 - it avoids hardcoded repo URL drift
+
+Optional review block:
+
+```yaml
+auto_review:
+  enabled: true
+  model: openai/gpt-5
+  thinking: medium
+  max_rework_passes: 1
+  fresh_session: true
+```
+
+Notes:
+
+- configured implementation and review models are validated against the local `pi` installation at startup
+- the review pass is internal to Symphony Pi; it drives `Rework` vs `Human Review`, but does not yet post GitHub PR review comments automatically
+- the review stage uses a fresh Pi session and a restricted review tool profile by default
 
 ## Linear workflow states
 
@@ -81,6 +105,22 @@ cd /path/to/symphony-pi
   --port 4050
 ```
 
+Temporary runtime overrides for a single process:
+
+```bash
+./bin/symphony /path/to/target-repo/WORKFLOW.md \
+  --i-understand-that-this-will-be-running-without-the-usual-guardrails \
+  --pi-model anthropic/claude-opus-4-6 \
+  --auto-review \
+  --review-model openai/gpt-5
+```
+
+Use this when you want:
+
+- normal checked-in workflow defaults for everyday runs
+- a one-off stronger implementation model
+- a one-off internal review pass for a risky change
+
 ## Verify
 
 1. Open `http://127.0.0.1:4050`
@@ -93,5 +133,5 @@ cd /path/to/symphony-pi
 
 ## Notes
 
-- Prefer SSH remotes for unattended push/PR workflows.
+- If the target repo already uses SSH, that remains the best unattended push/PR setup.
 - Symphony Pi stores Pi session data outside the repo clone by default, so target repos do not need `.symphony-pi/` in `.gitignore` for the standard setup.

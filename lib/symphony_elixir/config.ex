@@ -24,7 +24,9 @@ defmodule SymphonyElixir.Config do
   def settings do
     case Workflow.current() do
       {:ok, %{config: config}} when is_map(config) ->
-        Schema.parse(config)
+        with {:ok, settings} <- Schema.parse(config) do
+          {:ok, apply_runtime_overrides(settings)}
+        end
 
       {:error, reason} ->
         {:error, reason}
@@ -97,6 +99,18 @@ defmodule SymphonyElixir.Config do
     end
   end
 
+  @spec set_runtime_overrides(map()) :: :ok
+  def set_runtime_overrides(overrides) when is_map(overrides) do
+    Application.put_env(:symphony_elixir, :workflow_runtime_overrides, overrides)
+    :ok
+  end
+
+  @spec clear_runtime_overrides() :: :ok
+  def clear_runtime_overrides do
+    Application.delete_env(:symphony_elixir, :workflow_runtime_overrides)
+    :ok
+  end
+
   defp validate_semantics(settings) do
     cond do
       is_nil(settings.tracker.kind) ->
@@ -132,6 +146,44 @@ defmodule SymphonyElixir.Config do
 
       other ->
         "Invalid WORKFLOW.md config: #{inspect(other)}"
+    end
+  end
+
+  defp apply_runtime_overrides(settings) do
+    overrides = Application.get_env(:symphony_elixir, :workflow_runtime_overrides, %{})
+
+    settings
+    |> apply_pi_overrides(Map.get(overrides, :pi, %{}))
+    |> apply_auto_review_overrides(Map.get(overrides, :auto_review, %{}))
+  end
+
+  defp apply_pi_overrides(settings, overrides) when map_size(overrides) == 0, do: settings
+
+  defp apply_pi_overrides(settings, overrides) do
+    pi =
+      settings.pi
+      |> maybe_override(:model, overrides)
+      |> maybe_override(:thinking, overrides)
+
+    %{settings | pi: pi}
+  end
+
+  defp apply_auto_review_overrides(settings, overrides) when map_size(overrides) == 0, do: settings
+
+  defp apply_auto_review_overrides(settings, overrides) do
+    auto_review =
+      settings.auto_review
+      |> maybe_override(:enabled, overrides)
+      |> maybe_override(:model, overrides)
+      |> maybe_override(:thinking, overrides)
+
+    %{settings | auto_review: auto_review}
+  end
+
+  defp maybe_override(struct, key, overrides) do
+    case Map.fetch(overrides, key) do
+      {:ok, value} -> Map.put(struct, key, value)
+      :error -> struct
     end
   end
 end

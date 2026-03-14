@@ -34,6 +34,13 @@ pi:
   command: pi
   model: anthropic/claude-sonnet-4-5
   thinking: high
+# Optional internal review pass before final human handoff:
+# auto_review:
+#   enabled: true
+#   model: openai/gpt-5
+#   thinking: medium
+#   max_rework_passes: 1
+#   fresh_session: true
 ---
 
 You are working on a Linear ticket `{{ issue.identifier }}`
@@ -111,6 +118,7 @@ project-installed Symphony Pi package.
   - Special case: if a PR is already attached, treat as feedback/rework loop (run full PR feedback sweep, address or explicitly push back, revalidate, return to `Human Review`).
 - `In Progress` -> implementation actively underway.
 - `Human Review` -> PR is attached and validated; waiting on human approval.
+  - If `auto_review` is enabled in workflow config, Symphony Pi will run an internal review pass before this handoff is treated as final.
 - `Merging` -> approved by human; execute the `land` skill flow (do not call `gh pr merge` directly).
 - `Rework` -> reviewer requested changes; planning + implementation required.
 - `Done` -> terminal state; no further action required.

@@ -3,16 +3,29 @@ defmodule SymphonyElixir.CLI do
   Escript entrypoint for running Symphony with an explicit WORKFLOW.md path.
   """
 
-  alias SymphonyElixir.LogFile
+  alias SymphonyElixir.{LogFile, Pi.Preflight, Workflow}
 
   @acknowledgement_switch :i_understand_that_this_will_be_running_without_the_usual_guardrails
-  @switches [{@acknowledgement_switch, :boolean}, logs_root: :string, port: :integer]
+
+  @switches [
+    {@acknowledgement_switch, :boolean},
+    logs_root: :string,
+    port: :integer,
+    pi_model: :string,
+    pi_thinking: :string,
+    auto_review: :boolean,
+    no_auto_review: :boolean,
+    review_model: :string,
+    review_thinking: :string
+  ]
 
   @type ensure_started_result :: {:ok, [atom()]} | {:error, term()}
   @type deps :: %{
           file_regular?: (String.t() -> boolean()),
           load_dotenv: (String.t() -> :ok),
           set_workflow_file_path: (String.t() -> :ok | {:error, term()}),
+          set_runtime_overrides: (map() -> :ok),
+          validate_workflow: (-> :ok | {:error, String.t()}),
           set_logs_root: (String.t() -> :ok | {:error, term()}),
           set_server_port_override: (non_neg_integer() | nil -> :ok | {:error, term()}),
           ensure_all_started: (-> ensure_started_result())
@@ -36,14 +49,16 @@ defmodule SymphonyElixir.CLI do
       {opts, [], []} ->
         with :ok <- require_guardrails_acknowledgement(opts),
              :ok <- maybe_set_logs_root(opts, deps),
-             :ok <- maybe_set_server_port(opts, deps) do
+             :ok <- maybe_set_server_port(opts, deps),
+             :ok <- maybe_set_runtime_overrides(opts, deps) do
           run(Path.expand("WORKFLOW.md"), deps)
         end
 
       {opts, [workflow_path], []} ->
         with :ok <- require_guardrails_acknowledgement(opts),
              :ok <- maybe_set_logs_root(opts, deps),
-             :ok <- maybe_set_server_port(opts, deps) do
+             :ok <- maybe_set_server_port(opts, deps),
+             :ok <- maybe_set_runtime_overrides(opts, deps) do
           run(workflow_path, deps)
         end
 
@@ -56,25 +71,22 @@ defmodule SymphonyElixir.CLI do
   def run(workflow_path, deps) do
     expanded_path = Path.expand(workflow_path)
 
-    if deps.file_regular?.(expanded_path) do
-      :ok = deps.load_dotenv.(expanded_path)
-      :ok = deps.set_workflow_file_path.(expanded_path)
+    case deps.file_regular?.(expanded_path) do
+      true ->
+        with :ok <- deps.load_dotenv.(expanded_path),
+             :ok <- deps.set_workflow_file_path.(expanded_path),
+             :ok <- Map.get(deps, :validate_workflow, fn -> :ok end).() do
+          ensure_workflow_started(expanded_path, deps)
+        end
 
-      case deps.ensure_all_started.() do
-        {:ok, _started_apps} ->
-          :ok
-
-        {:error, reason} ->
-          {:error, "Failed to start Symphony with workflow #{expanded_path}: #{inspect(reason)}"}
-      end
-    else
-      {:error, "Workflow file not found: #{expanded_path}"}
+      false ->
+        {:error, "Workflow file not found: #{expanded_path}"}
     end
   end
 
   @spec usage_message() :: String.t()
   defp usage_message do
-    "Usage: symphony [--logs-root <path>] [--port <port>] [path-to-WORKFLOW.md]"
+    "Usage: symphony [--logs-root <path>] [--port <port>] [--pi-model <model>] [--pi-thinking <level>] [--auto-review | --no-auto-review] [--review-model <model>] [--review-thinking <level>] [path-to-WORKFLOW.md]"
   end
 
   @spec runtime_deps() :: deps()
@@ -82,11 +94,23 @@ defmodule SymphonyElixir.CLI do
     %{
       file_regular?: &File.regular?/1,
       load_dotenv: &load_dotenv_for_workflow/1,
-      set_workflow_file_path: &SymphonyElixir.Workflow.set_workflow_file_path/1,
+      set_workflow_file_path: &Workflow.set_workflow_file_path/1,
+      set_runtime_overrides: &SymphonyElixir.Config.set_runtime_overrides/1,
+      validate_workflow: &Preflight.validate_workflow/0,
       set_logs_root: &set_logs_root/1,
       set_server_port_override: &set_server_port_override/1,
       ensure_all_started: fn -> Application.ensure_all_started(:symphony_elixir) end
     }
+  end
+
+  defp ensure_workflow_started(expanded_path, deps) do
+    case deps.ensure_all_started.() do
+      {:ok, _started_apps} ->
+        :ok
+
+      {:error, reason} ->
+        {:error, "Failed to start Symphony with workflow #{expanded_path}: #{inspect(reason)}"}
+    end
   end
 
   @doc false
@@ -238,6 +262,47 @@ defmodule SymphonyElixir.CLI do
           {:error, usage_message()}
         end
     end
+  end
+
+  defp maybe_set_runtime_overrides(opts, deps) do
+    :ok = deps.set_runtime_overrides.(runtime_overrides_from_opts(opts))
+  end
+
+  defp runtime_overrides_from_opts(opts) do
+    %{}
+    |> maybe_put_nested(:pi, :model, last_non_blank_string(opts, :pi_model))
+    |> maybe_put_nested(:pi, :thinking, last_non_blank_string(opts, :pi_thinking))
+    |> maybe_put_nested(:auto_review, :enabled, auto_review_override(opts))
+    |> maybe_put_nested(:auto_review, :model, last_non_blank_string(opts, :review_model))
+    |> maybe_put_nested(:auto_review, :thinking, last_non_blank_string(opts, :review_thinking))
+  end
+
+  defp auto_review_override(opts) do
+    case {
+      List.last(Keyword.get_values(opts, :auto_review)),
+      List.last(Keyword.get_values(opts, :no_auto_review))
+    } do
+      {true, _} -> true
+      {_, true} -> false
+      _ -> nil
+    end
+  end
+
+  defp last_non_blank_string(opts, key) do
+    case List.last(Keyword.get_values(opts, key)) do
+      value when is_binary(value) ->
+        trimmed = String.trim(value)
+        if trimmed == "", do: nil, else: trimmed
+
+      _ ->
+        nil
+    end
+  end
+
+  defp maybe_put_nested(overrides, _section, _key, nil), do: overrides
+
+  defp maybe_put_nested(overrides, section, key, value) do
+    Map.update(overrides, section, %{key => value}, &Map.put(&1, key, value))
   end
 
   defp set_server_port_override(port) when is_integer(port) and port >= 0 do
