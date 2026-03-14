@@ -46,7 +46,13 @@ Notes:
 
 ## Install Symphony Pi
 
-Build the service from the Symphony Pi repo:
+For end users, prefer the packaged installer:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/dzmbs/symphony-pi/main/install.sh | sh
+```
+
+Build the service from the Symphony Pi repo only when you are developing Symphony Pi itself:
 
 ```bash
 cd /path/to/symphony-pi

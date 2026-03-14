@@ -24,26 +24,30 @@ conventions.
 If a claimed issue moves to a terminal state (`Done`, `Closed`, `Cancelled`, or `Duplicate`),
 Symphony stops the active agent for that issue and cleans up matching workspaces.
 
+## Before you start
+
+For normal use, you need these tools on your machine:
+
+- `git`
+- `pi`
+
 ## Quick Start
 
 For a new repository, the recommended path is:
 
 ```bash
-git clone https://github.com/dzmbs/symphony-pi
-cd symphony-pi
-mise trust
-mise install
-mise exec -- mix setup
-mise exec -- mix build
-mise exec -- mix install_cli
-
+curl -fsSL https://raw.githubusercontent.com/dzmbs/symphony-pi/main/install.sh | sh
 symphony-pi setup /path/to/your-repo
 ```
 
-If you prefer not to install the CLI into `PATH`, use the built escript directly:
+This install path downloads a packaged Symphony Pi release with the Erlang runtime bundled, so end
+users do not need to install Elixir, Erlang, or `mix`.
+
+If you prefer to pin a specific release version, set `SYMPHONY_PI_VERSION` first:
 
 ```bash
-./bin/symphony-pi setup /path/to/your-repo
+export SYMPHONY_PI_VERSION=v0.1.0
+curl -fsSL https://raw.githubusercontent.com/dzmbs/symphony-pi/main/install.sh | sh
 ```
 
 The setup command does the first-pass onboarding for you:
@@ -84,34 +88,41 @@ symphony-pi setup /path/to/your-repo
      Team Settings → Workflow in Linear.
 5. Follow the instructions below to install the required runtime dependencies and start the service.
 
-## Prerequisites
+## Install From Source
 
-We recommend using [mise](https://mise.jdx.dev/) to manage Elixir/Erlang versions.
+Use this path if you want to develop Symphony Pi itself.
 
-```bash
-mise install
-mise exec -- elixir --version
-```
+You need Elixir `1.19.5` with OTP `28`.
 
-## Run
+We recommend using [mise](https://mise.jdx.dev/) to manage those versions. `mix` ships with
+Elixir, so once Elixir is installed, `mix` is available too.
 
 ```bash
 git clone https://github.com/dzmbs/symphony-pi
 cd symphony-pi
 mise trust
 mise install
+mise exec -- elixir --version
 mise exec -- mix setup
 mise exec -- mix build
-mise exec -- ./bin/symphony-pi ./WORKFLOW.md
+mise exec -- mix install_cli
 ```
 
-For real use on another repo, prefer:
+## Run
+
+If you installed Symphony Pi with the release installer, run:
 
 ```bash
 symphony-pi setup /path/to/your-repo
 symphony-pi /path/to/your-repo/WORKFLOW.md \
   --i-understand-that-this-will-be-running-without-the-usual-guardrails \
   --port 4050
+```
+
+If you are running from source instead:
+
+```bash
+mise exec -- ./bin/symphony-pi ./WORKFLOW.md
 ```
 
 ## Configuration

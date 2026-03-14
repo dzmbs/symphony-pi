@@ -1,0 +1,87 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runs_on: ubuntu-latest
+            suffix: linux-x64
+          - runs_on: macos-13
+            suffix: darwin-x64
+          - runs_on: macos-14
+            suffix: darwin-arm64
+
+    runs-on: ${{ matrix.runs_on }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Elixir and Erlang
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.19.5"
+          otp-version: "28.0"
+
+      - name: Cache deps and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-${{ runner.arch }}-release-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-release-
+
+      - name: Install dependencies
+        run: MIX_ENV=prod mix deps.get
+
+      - name: Build release
+        run: MIX_ENV=prod mix build_release
+
+      - name: Package release
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist stage
+          cp -R _build/prod/rel/symphony_pi_runtime stage/symphony-pi
+          tar -C stage -czf "dist/symphony-pi-${{ matrix.suffix }}.tar.gz" symphony-pi
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: symphony-pi-${{ matrix.suffix }}
+          path: dist/*.tar.gz
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum *.tar.gz > SHA256SUMS
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

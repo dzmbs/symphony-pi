@@ -45,6 +45,7 @@ defmodule SymphonyElixir.MixProject do
         plt_add_apps: [:mix]
       ],
       escript: escript(),
+      releases: releases(),
       aliases: aliases(),
       deps: deps()
     ]
@@ -81,6 +82,7 @@ defmodule SymphonyElixir.MixProject do
     [
       setup: ["deps.get"],
       build: ["escript.build"],
+      build_release: ["release symphony_pi_runtime --overwrite"],
       install_cli: ["escript.install --force"],
       lint: ["specs.check", "credo --strict"]
     ]
@@ -93,5 +95,37 @@ defmodule SymphonyElixir.MixProject do
       name: "symphony-pi",
       path: "bin/symphony-pi"
     ]
+  end
+
+  defp releases do
+    [
+      symphony_pi_runtime: [
+        applications: [symphony_elixir: :permanent],
+        include_executables_for: [:unix],
+        strip_beams: true,
+        steps: [:assemble, &add_release_cli_wrapper/1]
+      ]
+    ]
+  end
+
+  defp add_release_cli_wrapper(%Mix.Release{} = release) do
+    runtime_script = Atom.to_string(release.name)
+    wrapper_path = Path.join([release.path, "bin", "symphony-pi"])
+
+    wrapper =
+      """
+      #!/bin/sh
+      set -eu
+
+      SELF=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+
+      exec "$SELF/#{runtime_script}" eval "SymphonyElixir.CLI.main(System.argv())" "$@"
+      """
+      |> String.trim_leading()
+
+    File.write!(wrapper_path, wrapper)
+    File.chmod!(wrapper_path, 0o755)
+
+    release
   end
 end
