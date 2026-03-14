@@ -39,6 +39,7 @@ defmodule SymphonyElixir.TestSupport do
 
         on_exit(fn ->
           Application.delete_env(:symphony_elixir, :workflow_file_path)
+          Application.delete_env(:symphony_elixir, :workflow_runtime_overrides)
           Application.delete_env(:symphony_elixir, :server_port_override)
           Application.delete_env(:symphony_elixir, :memory_tracker_issues)
           Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
@@ -138,6 +139,11 @@ defmodule SymphonyElixir.TestSupport do
           pi_turn_timeout_ms: 3_600_000,
           pi_read_timeout_ms: 5_000,
           pi_stall_timeout_ms: 300_000,
+          auto_review_enabled: false,
+          auto_review_model: nil,
+          auto_review_thinking: nil,
+          auto_review_max_rework_passes: 1,
+          auto_review_fresh_session: true,
           worker_ssh_hosts: [],
           worker_max_concurrent_agents_per_host: nil,
           hook_after_create: nil,
@@ -177,6 +183,11 @@ defmodule SymphonyElixir.TestSupport do
     pi_turn_timeout_ms = Keyword.get(config, :pi_turn_timeout_ms)
     pi_read_timeout_ms = Keyword.get(config, :pi_read_timeout_ms)
     pi_stall_timeout_ms = Keyword.get(config, :pi_stall_timeout_ms)
+    auto_review_enabled = Keyword.get(config, :auto_review_enabled)
+    auto_review_model = Keyword.get(config, :auto_review_model)
+    auto_review_thinking = Keyword.get(config, :auto_review_thinking)
+    auto_review_max_rework_passes = Keyword.get(config, :auto_review_max_rework_passes)
+    auto_review_fresh_session = Keyword.get(config, :auto_review_fresh_session)
     worker_ssh_hosts = Keyword.get(config, :worker_ssh_hosts)
     worker_max_concurrent_agents_per_host = Keyword.get(config, :worker_max_concurrent_agents_per_host)
     hook_after_create = Keyword.get(config, :hook_after_create)
@@ -222,6 +233,13 @@ defmodule SymphonyElixir.TestSupport do
           pi_read_timeout_ms,
           pi_stall_timeout_ms
         ),
+        auto_review_yaml(
+          auto_review_enabled,
+          auto_review_model,
+          auto_review_thinking,
+          auto_review_max_rework_passes,
+          auto_review_fresh_session
+        ),
         worker_yaml(worker_ssh_hosts, worker_max_concurrent_agents_per_host),
         hooks_yaml(hook_after_create, hook_before_run, hook_after_run, hook_before_remove, hook_timeout_ms),
         observability_yaml(observability_enabled, observability_refresh_ms, observability_render_interval_ms),
@@ -256,6 +274,18 @@ defmodule SymphonyElixir.TestSupport do
     lines = if turn_timeout_ms, do: lines ++ ["  turn_timeout_ms: #{yaml_value(turn_timeout_ms)}"], else: lines
     lines = if read_timeout_ms, do: lines ++ ["  read_timeout_ms: #{yaml_value(read_timeout_ms)}"], else: lines
     lines = if stall_timeout_ms, do: lines ++ ["  stall_timeout_ms: #{yaml_value(stall_timeout_ms)}"], else: lines
+    Enum.join(lines, "\n")
+  end
+
+  defp auto_review_yaml(false, nil, nil, 1, true), do: nil
+
+  defp auto_review_yaml(enabled, model, thinking, max_rework_passes, fresh_session) do
+    lines = ["auto_review:"]
+    lines = lines ++ ["  enabled: #{yaml_value(enabled)}"]
+    lines = if model, do: lines ++ ["  model: #{yaml_value(model)}"], else: lines
+    lines = if thinking, do: lines ++ ["  thinking: #{yaml_value(thinking)}"], else: lines
+    lines = lines ++ ["  max_rework_passes: #{yaml_value(max_rework_passes)}"]
+    lines = lines ++ ["  fresh_session: #{yaml_value(fresh_session)}"]
     Enum.join(lines, "\n")
   end
 

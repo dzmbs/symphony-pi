@@ -3,7 +3,7 @@ defmodule SymphonyElixir.PromptBuilder do
   Builds agent prompts from Linear issue data.
   """
 
-  alias SymphonyElixir.{Config, Workflow}
+  alias SymphonyElixir.{AutoReview, Config, Workflow}
 
   @render_opts [strict_variables: true, strict_filters: true]
 
@@ -23,6 +23,7 @@ defmodule SymphonyElixir.PromptBuilder do
       @render_opts
     )
     |> IO.iodata_to_binary()
+    |> append_auto_review_guidance(opts)
   end
 
   defp prompt_template!({:ok, %{prompt_template: prompt}}), do: default_prompt(prompt)
@@ -57,6 +58,18 @@ defmodule SymphonyElixir.PromptBuilder do
   defp default_prompt(prompt) when is_binary(prompt) do
     if String.trim(prompt) == "" do
       Config.workflow_prompt()
+    else
+      prompt
+    end
+  end
+
+  defp append_auto_review_guidance(prompt, opts) when is_binary(prompt) do
+    if Keyword.get(opts, :auto_review_enabled, false) do
+      prompt <>
+        "\n\nAuto-review is enabled for this run.\n" <>
+        "- When implementation is complete and validated, prepare the branch/PR as usual.\n" <>
+        "- Move the issue to `#{AutoReview.human_review_state()}` when you believe it is ready.\n" <>
+        "- An automated review pass will run before the human handoff is treated as final.\n"
     else
       prompt
     end

@@ -48,6 +48,14 @@ const DANGEROUS_BASH_PATTERNS = [
 	/\bdd\b[^\n\r]*\bof=/i,
 	/\b(shutdown|reboot|poweroff|halt)\b/i,
 ];
+const REVIEW_BASH_MUTATION_PATTERNS = [
+	/[;&|]\s*(git\s+(add|commit|push|checkout|switch|merge|rebase|apply|am|stash|reset|clean|restore))/i,
+	/\bgit\s+(add|commit|push|checkout|switch|merge|rebase|apply|am|stash|reset|clean|restore)\b/i,
+	/\b(touch|mkdir|rmdir|mv|cp|install)\b/i,
+	/\b(sed|perl)\b[^\n\r]*\s-i\b/i,
+	/>|>>|\|\s*tee\b/i,
+];
+const REVIEW_ACTIVE_TOOLS = ["read", "bash"];
 
 const SECRET_HOME_PATHS = [".ssh", ".aws", ".gnupg"];
 const PROTECTED_BASENAMES = [".env", ".npmrc", ".pypirc"];
@@ -100,6 +108,13 @@ function commandTouchesSecretHomePath(command: string): boolean {
 export default function symphonyExtension(pi: ExtensionAPI) {
 	const bridgeUrl = process.env.SYMPHONY_TOOL_BRIDGE_URL;
 	const safetyDisabled = process.env.SYMPHONY_PI_DISABLE_SAFETY === "1";
+	const toolProfile = process.env.SYMPHONY_PI_TOOL_PROFILE;
+
+	pi.on("session_start", async () => {
+		if (toolProfile === "review") {
+			pi.setActiveTools(REVIEW_ACTIVE_TOOLS);
+		}
+	});
 
 	if (!safetyDisabled) {
 		pi.on("tool_call", async (event, ctx) => {
@@ -119,10 +134,24 @@ export default function symphonyExtension(pi: ExtensionAPI) {
 						reason: "Blocked bash command touching protected home-directory secrets.",
 					};
 				}
+
+				if (toolProfile === "review" && REVIEW_BASH_MUTATION_PATTERNS.some((pattern) => pattern.test(command))) {
+					return {
+						block: true,
+						reason: "Blocked mutating bash command in Symphony Pi review profile.",
+					};
+				}
 			}
 
 			if (isToolCallEventType("read", event) || isToolCallEventType("write", event) || isToolCallEventType("edit", event)) {
 				const resolvedPath = normalizeToolPath(event.input.path, ctx.cwd);
+
+				if (toolProfile === "review" && (isToolCallEventType("write", event) || isToolCallEventType("edit", event))) {
+					return {
+						block: true,
+						reason: "Blocked write/edit tool in Symphony Pi review profile.",
+					};
+				}
 
 				if ((isToolCallEventType("write", event) || isToolCallEventType("edit", event)) && !isWithinWorkspace(resolvedPath, ctx.cwd)) {
 					return {

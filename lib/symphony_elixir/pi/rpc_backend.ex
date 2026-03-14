@@ -34,13 +34,13 @@ defmodule SymphonyElixir.Pi.RpcBackend do
   Returns a session map used by `run_turn/4` and `stop_session/1`.
   """
   def start_session(workspace, opts) do
-    pi_config = Config.settings!().pi
+    pi_config = pi_config_for_opts(opts)
     session_dir = session_dir_for(workspace, pi_config)
     worker_host = Keyword.get(opts, :worker_host)
 
     with :ok <- ensure_dir(session_dir),
          {:ok, bridge_pid, bridge_port} <- start_tool_bridge(),
-         {:ok, port} <- start_pi_process(workspace, pi_config, session_dir, bridge_port, worker_host) do
+         {:ok, port} <- start_pi_process(workspace, pi_config, session_dir, bridge_port, worker_host, opts) do
       pi_pid = RpcClient.os_pid(port)
 
       Logger.info("Pi RPC session started workspace=#{workspace} pi_pid=#{pi_pid || "unknown"} bridge_port=#{bridge_port}")
@@ -77,7 +77,7 @@ defmodule SymphonyElixir.Pi.RpcBackend do
   def run_turn(session, prompt, issue, opts) do
     %{port: port, pi_pid: pi_pid} = session
     on_message = Keyword.get(opts, :on_message, &default_on_message/1)
-    pi_config = Config.settings!().pi
+    pi_config = pi_config_for_opts(opts)
 
     # Increment turn number for this prompt
     turn_number = Map.get(session, :turn_number, 0) + 1
@@ -200,10 +200,16 @@ defmodule SymphonyElixir.Pi.RpcBackend do
       {:ok, {:event, %{"type" => "agent_end"} = event}, _new_buffer} ->
         normalized = EventNormalizer.normalize(event, normalizer_context(session))
         on_message.(normalized)
+        assistant_text = extract_final_assistant_text(event)
 
         case emit_runtime_snapshot(session, on_message, pi_config, force: true) do
           {:ok, session, _last_stats_at_ms} ->
-            {:ok, %{result: :turn_completed, session_id: turn_scoped_session_id(session)}, session}
+            {:ok,
+             %{
+               result: :turn_completed,
+               session_id: turn_scoped_session_id(session),
+               assistant_text: assistant_text
+             }, session}
 
           {:terminal, result, session} ->
             terminal_result(result, session)
@@ -347,20 +353,20 @@ defmodule SymphonyElixir.Pi.RpcBackend do
     end
   end
 
-  defp start_pi_process(workspace, pi_config, session_dir, bridge_port, nil = _worker_host) do
-    env = [{"SYMPHONY_TOOL_BRIDGE_URL", "http://127.0.0.1:#{bridge_port}"}]
-    RpcClient.start(workspace, start_opts(pi_config, session_dir) ++ [env: env])
+  defp start_pi_process(workspace, pi_config, session_dir, bridge_port, nil = _worker_host, opts) do
+    env = runtime_env(bridge_port, opts)
+    RpcClient.start(workspace, start_opts(pi_config, session_dir, opts) ++ [env: env])
   end
 
-  defp start_pi_process(workspace, pi_config, session_dir, bridge_port, worker_host) do
+  defp start_pi_process(workspace, pi_config, session_dir, bridge_port, worker_host, opts) do
     # For remote workers, use SSH reverse port forwarding (-R) so the remote Pi
     # can reach the local bridge at 127.0.0.1:<remote_port> on the worker.
     # We use the same port number — SSH will forward remote:<bridge_port> -> local:127.0.0.1:<bridge_port>
-    env = [{"SYMPHONY_TOOL_BRIDGE_URL", "http://127.0.0.1:#{bridge_port}"}]
+    env = runtime_env(bridge_port, opts)
 
     RpcClient.start(
       workspace,
-      start_opts(pi_config, session_dir) ++
+      start_opts(pi_config, session_dir, opts) ++
         [
           env: env,
           worker_host: worker_host,
@@ -555,7 +561,7 @@ defmodule SymphonyElixir.Pi.RpcBackend do
 
   defp port_closed?(port) when is_port(port), do: :erlang.port_info(port) == :undefined
 
-  defp classify_terminal_event(%{"type" => "agent_end"}), do: :agent_end
+  defp classify_terminal_event(%{"type" => "agent_end"} = event), do: {:agent_end, event}
 
   defp classify_terminal_event(%{"type" => "auto_retry_end", "success" => false} = event) do
     {:turn_failed, Map.get(event, "finalError", "auto-retry exhausted")}
@@ -570,8 +576,14 @@ defmodule SymphonyElixir.Pi.RpcBackend do
 
   defp classify_terminal_event(_event), do: nil
 
-  defp terminal_result(:agent_end, session),
-    do: {:ok, %{result: :turn_completed, session_id: turn_scoped_session_id(session)}, session}
+  defp terminal_result({:agent_end, event}, session),
+    do:
+      {:ok,
+       %{
+         result: :turn_completed,
+         session_id: turn_scoped_session_id(session),
+         assistant_text: extract_final_assistant_text(event)
+       }, session}
 
   defp terminal_result({:turn_failed, reason}, _session),
     do: {:error, {:turn_failed, reason}}
@@ -579,7 +591,7 @@ defmodule SymphonyElixir.Pi.RpcBackend do
   defp terminal_result({:port_exit, status}, _session),
     do: {:error, {:port_exit, status}}
 
-  defp start_opts(pi_config, session_dir) do
+  defp start_opts(pi_config, session_dir, start_opts) do
     opts = [
       command: pi_config.command,
       session_dir: session_dir
@@ -599,6 +611,13 @@ defmodule SymphonyElixir.Pi.RpcBackend do
         opts
       end
 
+    opts =
+      if Keyword.get(start_opts, :no_session, false) do
+        Keyword.put(opts, :no_session, true)
+      else
+        opts
+      end
+
     # Load the Symphony extension explicitly via --extension flag
     # since Pi runs inside the issue workspace, not the symphony-pi repo.
     extension_source = resolve_extension_source(pi_config)
@@ -609,6 +628,18 @@ defmodule SymphonyElixir.Pi.RpcBackend do
       opts
     end
   end
+
+  defp runtime_env(bridge_port, opts) do
+    [{"SYMPHONY_TOOL_BRIDGE_URL", "http://127.0.0.1:#{bridge_port}"}]
+    |> maybe_put_env("SYMPHONY_PI_TOOL_PROFILE", tool_profile_value(Keyword.get(opts, :tool_profile)))
+  end
+
+  defp maybe_put_env(env, _key, nil), do: env
+  defp maybe_put_env(env, key, value), do: [{key, value} | env]
+
+  defp tool_profile_value(profile) when is_binary(profile) and profile != "", do: profile
+  defp tool_profile_value(profile) when is_atom(profile), do: Atom.to_string(profile)
+  defp tool_profile_value(_profile), do: nil
 
   defp resolve_extension_source(pi_config) do
     case pi_config.extension_dir do
@@ -642,6 +673,48 @@ defmodule SymphonyElixir.Pi.RpcBackend do
         nil
     end
   end
+
+  defp pi_config_for_opts(opts) do
+    base = Config.settings!().pi
+    runtime_overrides = Keyword.get(opts, :runtime_config, %{})
+
+    overrides =
+      runtime_overrides
+      |> Enum.into(%{})
+      |> Map.take([:command, :model, :thinking, :session_subdir, :extension_dir, :turn_timeout_ms, :read_timeout_ms, :stall_timeout_ms])
+
+    struct(base, overrides)
+  end
+
+  defp extract_final_assistant_text(%{"messages" => messages}) when is_list(messages) do
+    messages
+    |> Enum.reverse()
+    |> Enum.find_value(&assistant_message_text/1)
+  end
+
+  defp extract_final_assistant_text(_event), do: nil
+
+  defp assistant_message_text(%{"role" => "assistant", "content" => content}), do: content_to_text(content)
+  defp assistant_message_text(%{role: "assistant", content: content}), do: content_to_text(content)
+  defp assistant_message_text(_message), do: nil
+
+  defp content_to_text(content) when is_binary(content), do: content
+
+  defp content_to_text(content) when is_list(content) do
+    content
+    |> Enum.map(fn
+      %{"type" => "text", "text" => text} when is_binary(text) -> text
+      %{type: "text", text: text} when is_binary(text) -> text
+      _ -> nil
+    end)
+    |> Enum.reject(&is_nil/1)
+    |> case do
+      [] -> nil
+      parts -> Enum.join(parts)
+    end
+  end
+
+  defp content_to_text(_content), do: nil
 
   defp normalizer_context(%{pi_pid: pi_pid} = session) do
     [

@@ -4,7 +4,7 @@ defmodule SymphonyElixir.AgentRunner do
   """
 
   require Logger
-  alias SymphonyElixir.{Config, Linear.Issue, PromptBuilder, Tracker, Workspace}
+  alias SymphonyElixir.{AutoReview, Config, Linear.Issue, PromptBuilder, Tracker, Workspace}
 
   @type worker_host :: String.t() | nil
 
@@ -101,6 +101,7 @@ defmodule SymphonyElixir.AgentRunner do
     max_turns = Keyword.get(opts, :max_turns, Config.settings!().agent.max_turns)
     issue_state_fetcher = Keyword.get(opts, :issue_state_fetcher, &Tracker.fetch_issue_states_by_ids/1)
     latest_session_key = {__MODULE__, :latest_session, make_ref()}
+    implementation_prompt_builder = &build_implementation_turn_prompt(&1, opts, &2, &3)
 
     with {:ok, session} <- backend.start_session(workspace, opts) do
       Process.put(latest_session_key, session)
@@ -115,11 +116,33 @@ defmodule SymphonyElixir.AgentRunner do
                update_recipient,
                opts,
                issue_state_fetcher,
+               implementation_prompt_builder,
                1,
                max_turns
              ) do
-          {:ok, _final_session} ->
-            :ok
+          {:ok, final_session, final_issue} ->
+            Process.put(latest_session_key, final_session)
+
+            case maybe_run_auto_review(
+                   backend,
+                   final_session,
+                   latest_session_key,
+                   workspace,
+                   final_issue,
+                   update_recipient,
+                   opts,
+                   issue_state_fetcher,
+                   max_turns,
+                   0
+                 ) do
+              {:ok, reviewed_session} ->
+                Process.put(latest_session_key, reviewed_session)
+                :ok
+
+              {:error, reason, reviewed_session} ->
+                Process.put(latest_session_key, reviewed_session)
+                {:error, reason}
+            end
 
           {:error, reason, _final_session} ->
             {:error, reason}
@@ -135,8 +158,8 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp do_run_agent_turns(backend, session, latest_session_key, workspace, issue, update_recipient, opts, issue_state_fetcher, turn_number, max_turns) do
-    prompt = build_turn_prompt(issue, opts, turn_number, max_turns)
+  defp do_run_agent_turns(backend, session, latest_session_key, workspace, issue, update_recipient, opts, issue_state_fetcher, prompt_builder, turn_number, max_turns) do
+    prompt = prompt_builder.(issue, turn_number, max_turns)
 
     with {:ok, turn_result, updated_session} <-
            backend.run_turn(
@@ -162,6 +185,7 @@ defmodule SymphonyElixir.AgentRunner do
             update_recipient,
             opts,
             issue_state_fetcher,
+            prompt_builder,
             turn_number + 1,
             max_turns
           )
@@ -169,10 +193,10 @@ defmodule SymphonyElixir.AgentRunner do
         {:continue, refreshed_issue} ->
           Logger.info("Reached agent.max_turns for #{issue_context(refreshed_issue)} with issue still active; returning control to orchestrator")
 
-          {:ok, updated_session}
+          {:ok, updated_session, refreshed_issue}
 
-        {:done, _refreshed_issue} ->
-          {:ok, updated_session}
+        {:done, refreshed_issue} ->
+          {:ok, updated_session, refreshed_issue}
 
         {:error, reason} ->
           {:error, reason, updated_session}
@@ -180,9 +204,132 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp build_turn_prompt(issue, opts, 1, _max_turns), do: PromptBuilder.build_prompt(issue, opts)
+  defp maybe_run_auto_review(
+         backend,
+         session,
+         latest_session_key,
+         workspace,
+         issue,
+         update_recipient,
+         opts,
+         issue_state_fetcher,
+         max_turns,
+         rework_pass
+       ) do
+    settings = Config.settings!()
 
-  defp build_turn_prompt(_issue, _opts, turn_number, max_turns) do
+    cond do
+      not AutoReview.enabled?(settings) ->
+        {:ok, session}
+
+      not review_ready_state?(issue.state) ->
+        {:ok, session}
+
+      true ->
+        send_agent_update(update_recipient, issue, auto_review_update("auto-review started"))
+
+        case run_review_pass(backend, workspace, issue, update_recipient, opts, settings) do
+          {:ok, %{status: :pass} = verdict} ->
+            Logger.info("Auto-review passed for #{issue_context(issue)} summary=#{inspect(verdict.summary)}")
+            send_agent_update(update_recipient, issue, auto_review_update("auto-review passed"))
+            {:ok, session}
+
+          {:ok, %{status: :changes_requested} = verdict} ->
+            Logger.info("Auto-review requested changes for #{issue_context(issue)} findings=#{length(verdict.findings)}")
+            send_agent_update(update_recipient, issue, auto_review_update("auto-review requested changes"))
+
+            maybe_run_rework(
+              backend,
+              session,
+              latest_session_key,
+              workspace,
+              issue,
+              verdict,
+              update_recipient,
+              opts,
+              issue_state_fetcher,
+              max_turns,
+              rework_pass,
+              settings
+            )
+
+          {:error, reason} ->
+            Logger.warning("Auto-review failed for #{issue_context(issue)} reason=#{inspect(reason)}; leaving issue in #{AutoReview.human_review_state()} for normal handoff")
+
+            send_agent_update(update_recipient, issue, auto_review_update("auto-review failed; leaving issue in Human Review"))
+            {:ok, session}
+        end
+    end
+  end
+
+  defp run_review_pass(backend, workspace, issue, update_recipient, opts, settings) do
+    review_opts =
+      opts
+      |> Keyword.put(:runtime_config, AutoReview.runtime_overrides(settings))
+      |> Keyword.put(:no_session, settings.auto_review.fresh_session == true)
+      |> Keyword.put(:tool_profile, :review)
+
+    with {:ok, review_session} <- backend.start_session(workspace, review_opts) do
+      try do
+        case backend.run_turn(
+               review_session,
+               AutoReview.build_review_prompt(issue),
+               issue,
+               Keyword.put(review_opts, :on_message, agent_message_handler(update_recipient, issue))
+             ) do
+          {:ok, turn_result, updated_review_session} ->
+            Process.put({__MODULE__, :latest_review_session}, updated_review_session)
+            parse_review_result(turn_result)
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+      after
+        final_review_session = Process.get({__MODULE__, :latest_review_session}, review_session)
+        Process.delete({__MODULE__, :latest_review_session})
+        backend.stop_session(final_review_session)
+      end
+    end
+  end
+
+  defp parse_review_result(%{assistant_text: assistant_text}) when is_binary(assistant_text) do
+    AutoReview.parse_verdict(assistant_text)
+  end
+
+  defp parse_review_result(_turn_result), do: {:error, :missing_review_output}
+
+  defp refresh_issue_with_state(%Issue{id: issue_id} = issue, issue_state_fetcher, fallback_state)
+       when is_binary(issue_id) do
+    case issue_state_fetcher.([issue_id]) do
+      {:ok, [%Issue{} = refreshed_issue | _]} ->
+        {:ok, %{refreshed_issue | state: fallback_state}}
+
+      {:ok, []} ->
+        {:ok, %{issue | state: fallback_state}}
+
+      {:error, reason} ->
+        {:error, {:issue_state_refresh_failed, reason}}
+    end
+  end
+
+  defp review_ready_state?(state_name) when is_binary(state_name) do
+    normalize_issue_state(state_name) == normalize_issue_state(AutoReview.human_review_state())
+  end
+
+  defp review_ready_state?(_state_name), do: false
+
+  defp auto_review_update(message) do
+    %{
+      event: :notification,
+      timestamp: DateTime.utc_now(),
+      raw: message
+    }
+  end
+
+  defp build_implementation_turn_prompt(issue, opts, 1, _max_turns),
+    do: PromptBuilder.build_prompt(issue, Keyword.put(opts, :auto_review_enabled, AutoReview.enabled?()))
+
+  defp build_implementation_turn_prompt(_issue, _opts, turn_number, max_turns) do
     """
     Continuation guidance:
 
@@ -192,6 +339,119 @@ defmodule SymphonyElixir.AgentRunner do
     - The original task instructions and prior turn context are already present in this session, so do not restate them before acting.
     - Focus on the remaining ticket work and do not end the turn while the issue stays active unless you are truly blocked.
     """
+  end
+
+  defp build_rework_turn_prompt(issue, verdict, rework_pass, max_rework_passes, 1, _max_turns),
+    do: AutoReview.build_rework_prompt(issue, verdict, rework_pass, max_rework_passes)
+
+  defp build_rework_turn_prompt(_issue, _verdict, rework_pass, max_rework_passes, turn_number, max_turns) do
+    """
+    Rework continuation guidance:
+
+    - This is rework pass #{rework_pass} of #{max_rework_passes}.
+    - This is continuation turn ##{turn_number} of #{max_turns} for the current rework cycle.
+    - Continue addressing the automated review findings already provided in this session.
+    - Keep the issue in `Rework` until the review findings are fully resolved and validated.
+    - Move the issue back to `#{AutoReview.human_review_state()}` only when the requested changes are complete.
+    """
+  end
+
+  defp maybe_run_rework(
+         backend,
+         session,
+         latest_session_key,
+         workspace,
+         issue,
+         verdict,
+         update_recipient,
+         opts,
+         issue_state_fetcher,
+         max_turns,
+         rework_pass,
+         settings
+       ) do
+    max_rework_passes = AutoReview.max_rework_passes(settings)
+
+    if rework_pass >= max_rework_passes do
+      Logger.warning("Auto-review exhausted rework passes for #{issue_context(issue)}")
+      _ = Tracker.update_issue_state(issue.id, "Rework")
+      send_agent_update(update_recipient, issue, auto_review_update("auto-review exhausted; leaving issue in Rework"))
+      {:ok, session}
+    else
+      next_rework_pass = rework_pass + 1
+
+      with :ok <- Tracker.update_issue_state(issue.id, "Rework"),
+           {:ok, refreshed_issue} <- refresh_issue_with_state(issue, issue_state_fetcher, "Rework") do
+        run_rework_cycle(
+          backend,
+          session,
+          latest_session_key,
+          workspace,
+          refreshed_issue,
+          verdict,
+          update_recipient,
+          opts,
+          issue_state_fetcher,
+          max_turns,
+          next_rework_pass,
+          max_rework_passes
+        )
+      else
+        {:error, reason} ->
+          {:error, {:auto_review_rework_failed, reason}, session}
+      end
+    end
+  end
+
+  defp run_rework_cycle(
+         backend,
+         session,
+         latest_session_key,
+         workspace,
+         refreshed_issue,
+         verdict,
+         update_recipient,
+         opts,
+         issue_state_fetcher,
+         max_turns,
+         rework_pass,
+         max_rework_passes
+       ) do
+    rework_prompt_builder =
+      &build_rework_turn_prompt(&1, verdict, rework_pass, max_rework_passes, &2, &3)
+
+    case do_run_agent_turns(
+           backend,
+           session,
+           latest_session_key,
+           workspace,
+           refreshed_issue,
+           update_recipient,
+           opts,
+           issue_state_fetcher,
+           rework_prompt_builder,
+           1,
+           max_turns
+         ) do
+      {:ok, updated_session, final_issue} ->
+        Process.put(latest_session_key, updated_session)
+
+        maybe_run_auto_review(
+          backend,
+          updated_session,
+          latest_session_key,
+          workspace,
+          final_issue,
+          update_recipient,
+          opts,
+          issue_state_fetcher,
+          max_turns,
+          rework_pass
+        )
+
+      {:error, reason, updated_session} ->
+        {:error, reason, updated_session}
+    end
   end
 
   defp continue_with_issue?(%Issue{id: issue_id} = issue, issue_state_fetcher) when is_binary(issue_id) do

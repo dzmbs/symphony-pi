@@ -66,6 +66,79 @@ defmodule SymphonyElixir.CoreTest do
     def stop_session(_session), do: :ok
   end
 
+  defmodule AutoReviewBackend do
+    @behaviour SymphonyElixir.AgentBackend
+
+    @impl true
+    def start_session(_workspace, opts) do
+      recipient = Keyword.fetch!(opts, :events_recipient)
+      runtime_config = Keyword.get(opts, :runtime_config, [])
+      no_session = Keyword.get(opts, :no_session, false)
+      role = if runtime_config == [], do: :implementer, else: :reviewer
+
+      send(recipient, {:auto_review_start_session, role, runtime_config, no_session})
+
+      {:ok,
+       %{
+         role: role,
+         recipient: recipient,
+         stopped_recipient: Keyword.fetch!(opts, :stopped_recipient)
+       }}
+    end
+
+    @impl true
+    def run_turn(session, prompt, issue, opts) do
+      send(session.recipient, {:auto_review_run_turn, session.role, issue.state, prompt})
+
+      on_message = Keyword.fetch!(opts, :on_message)
+      on_message.(%{event: :session_started, timestamp: DateTime.utc_now(), session_id: "#{session.role}-turn"})
+      on_message.(%{event: :turn_completed, timestamp: DateTime.utc_now(), session_id: "#{session.role}-turn"})
+
+      result =
+        case session.role do
+          :implementer ->
+            %{result: :turn_completed, session_id: "implementer-turn"}
+
+          :reviewer ->
+            case Process.get(:auto_review_phase, :changes_requested) do
+              :changes_requested ->
+                Process.put(:auto_review_phase, :pass)
+
+                %{
+                  result: :turn_completed,
+                  session_id: "reviewer-turn",
+                  assistant_text:
+                    ~s({"status":"changes_requested","summary":"Builder code is missing on TP/SL","findings":[{"severity":"high","title":"Missing TPSL builder_code","summary":"Top-level builder_code is missing from the TP/SL request payload.","path":"src/cli/commands.zig"}]})
+                }
+
+              :invalid ->
+                %{
+                  result: :turn_completed,
+                  session_id: "reviewer-turn",
+                  assistant_text: "not valid review json"
+                }
+
+              :pass ->
+                %{
+                  result: :turn_completed,
+                  session_id: "reviewer-turn",
+                  assistant_text: ~s({"status":"pass","summary":"Looks good","findings":[]})
+                }
+            end
+        end
+
+      {:ok, result, session}
+    end
+
+    @impl true
+    def stop_session(%{stopped_recipient: recipient, role: role}) do
+      send(recipient, {:auto_review_stop_session, role})
+      :ok
+    end
+
+    def stop_session(_session), do: :ok
+  end
+
   test "config defaults and validation checks" do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_api_token: nil,
@@ -143,6 +216,39 @@ defmodule SymphonyElixir.CoreTest do
 
     write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "123")
     assert {:error, {:unsupported_tracker_kind, "123"}} = Config.validate!()
+  end
+
+  test "auto_review config defaults and custom values" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      auto_review_enabled: nil,
+      auto_review_model: nil,
+      auto_review_thinking: nil,
+      auto_review_max_rework_passes: nil,
+      auto_review_fresh_session: nil
+    )
+
+    config = Config.settings!()
+    assert config.auto_review.enabled == false
+    assert config.auto_review.model == nil
+    assert config.auto_review.thinking == nil
+    assert config.auto_review.max_rework_passes == 1
+    assert config.auto_review.fresh_session == true
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      auto_review_enabled: true,
+      auto_review_model: "openai/gpt-5",
+      auto_review_thinking: "medium",
+      auto_review_max_rework_passes: 2,
+      auto_review_fresh_session: true
+    )
+
+    config = Config.settings!()
+    assert config.auto_review.enabled == true
+    assert config.auto_review.model == "openai/gpt-5"
+    assert config.auto_review.thinking == "medium"
+    assert config.auto_review.max_rework_passes == 2
+    assert config.auto_review.fresh_session == true
+    assert :ok = Config.validate!()
   end
 
   test "current WORKFLOW.md file is valid and complete" do
@@ -1079,6 +1185,143 @@ defmodule SymphonyElixir.CoreTest do
 
     assert_receive {:backend_stopped, stopped_session}, 500
     assert stopped_session.turn_number == 2
+  end
+
+  test "agent runner can auto-review and rework before leaving human review" do
+    Application.put_env(:symphony_elixir, :backend_module_override, AutoReviewBackend)
+    Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+    on_exit(fn ->
+      Application.delete_env(:symphony_elixir, :backend_module_override)
+      Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
+      Application.delete_env(:symphony_elixir, :memory_tracker_issues)
+      Process.delete(:auto_review_fetch_count)
+      Process.delete(:auto_review_phase)
+    end)
+
+    Process.put(:auto_review_phase, :changes_requested)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      tracker_api_token: nil,
+      tracker_project_slug: nil,
+      auto_review_enabled: true,
+      auto_review_model: "openai/gpt-5",
+      auto_review_thinking: "medium",
+      auto_review_max_rework_passes: 1,
+      auto_review_fresh_session: true
+    )
+
+    issue = %Issue{
+      id: "issue-auto-review",
+      identifier: "MT-AR-1",
+      title: "Auto review loop",
+      description: "Verify automated review can request rework",
+      state: "In Progress",
+      url: "https://example.org/issues/MT-AR-1",
+      labels: []
+    }
+
+    state_fetcher = fn [_issue_id] ->
+      attempt = Process.get(:auto_review_fetch_count, 0) + 1
+      Process.put(:auto_review_fetch_count, attempt)
+
+      state =
+        case attempt do
+          1 -> "Human Review"
+          2 -> "Rework"
+          3 -> "Human Review"
+          _ -> "Done"
+        end
+
+      {:ok, [%{issue | state: state}]}
+    end
+
+    assert :ok =
+             AgentRunner.run(
+               issue,
+               self(),
+               events_recipient: self(),
+               stopped_recipient: self(),
+               issue_state_fetcher: state_fetcher,
+               max_turns: 2
+             )
+
+    assert_receive {:auto_review_start_session, :implementer, [], false}, 500
+    assert_receive {:auto_review_run_turn, :implementer, "In Progress", implement_prompt}, 500
+    assert implement_prompt =~ "Auto-review is enabled for this run."
+
+    assert_receive {:auto_review_start_session, :reviewer, review_runtime_config, true}, 500
+    assert review_runtime_config[:model] == "openai/gpt-5"
+    assert review_runtime_config[:thinking] == "medium"
+    assert_receive {:auto_review_run_turn, :reviewer, "Human Review", review_prompt}, 500
+    assert review_prompt =~ "Return ONLY valid JSON"
+
+    assert_receive {:memory_tracker_state_update, "issue-auto-review", "Rework"}, 500
+    assert_receive {:auto_review_run_turn, :implementer, "Rework", rework_prompt}, 500
+    assert rework_prompt =~ "Rework cycle for Linear issue `MT-AR-1`."
+
+    assert_receive {:auto_review_start_session, :reviewer, _review_runtime_config, true}, 500
+    assert_receive {:auto_review_run_turn, :reviewer, "Human Review", _review_prompt}, 500
+
+    assert_receive {:auto_review_stop_session, :reviewer}, 500
+    assert_receive {:auto_review_stop_session, :reviewer}, 500
+    assert_receive {:auto_review_stop_session, :implementer}, 500
+  end
+
+  test "agent runner falls back to normal human review when auto-review output is invalid" do
+    Application.put_env(:symphony_elixir, :backend_module_override, AutoReviewBackend)
+    Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+    on_exit(fn ->
+      Application.delete_env(:symphony_elixir, :backend_module_override)
+      Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
+      Application.delete_env(:symphony_elixir, :memory_tracker_issues)
+      Process.delete(:auto_review_phase)
+    end)
+
+    Process.put(:auto_review_phase, :invalid)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      tracker_api_token: nil,
+      tracker_project_slug: nil,
+      auto_review_enabled: true,
+      auto_review_model: "openai/gpt-5",
+      auto_review_thinking: "medium"
+    )
+
+    issue = %Issue{
+      id: "issue-auto-review-invalid",
+      identifier: "MT-AR-2",
+      title: "Auto review fallback",
+      description: "Verify invalid review output does not fail the run",
+      state: "In Progress",
+      url: "https://example.org/issues/MT-AR-2",
+      labels: []
+    }
+
+    state_fetcher = fn [_issue_id] ->
+      {:ok, [%{issue | state: "Human Review"}]}
+    end
+
+    assert :ok =
+             AgentRunner.run(
+               issue,
+               self(),
+               events_recipient: self(),
+               stopped_recipient: self(),
+               issue_state_fetcher: state_fetcher,
+               max_turns: 1
+             )
+
+    assert_receive {:runtime_worker_update, "issue-auto-review-invalid", %{raw: "auto-review started"}}, 500
+
+    assert_receive {:runtime_worker_update, "issue-auto-review-invalid", %{raw: "auto-review failed; leaving issue in Human Review"}},
+                   500
+
+    assert_receive {:auto_review_stop_session, :reviewer}, 500
+    assert_receive {:auto_review_stop_session, :implementer}, 500
   end
 
   test "agent runner falls back to the next configured worker host within the same run" do

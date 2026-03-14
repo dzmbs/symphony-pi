@@ -354,6 +354,20 @@ defmodule SymphonyElixir.Pi.RpcClient do
     end
   end
 
+  @doc """
+  Build a get_available_models command map.
+  """
+  @spec get_available_models_command(keyword()) :: map()
+  def get_available_models_command(opts \\ []) do
+    cmd = %{"type" => "get_available_models"}
+
+    if id = Keyword.get(opts, :id) do
+      Map.put(cmd, "id", id)
+    else
+      cmd
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # Internal
   # ---------------------------------------------------------------------------

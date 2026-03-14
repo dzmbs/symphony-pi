@@ -164,6 +164,28 @@ defmodule SymphonyElixir.Config.Schema do
     end
   end
 
+  defmodule AutoReview do
+    @moduledoc false
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @primary_key false
+    embedded_schema do
+      field(:enabled, :boolean, default: false)
+      field(:model, :string)
+      field(:thinking, :string)
+      field(:max_rework_passes, :integer, default: 1)
+      field(:fresh_session, :boolean, default: true)
+    end
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(attrs, [:enabled, :model, :thinking, :max_rework_passes, :fresh_session], empty_values: [])
+      |> validate_number(:max_rework_passes, greater_than_or_equal_to: 0)
+    end
+  end
+
   defmodule Hooks do
     @moduledoc false
     use Ecto.Schema
@@ -252,6 +274,7 @@ defmodule SymphonyElixir.Config.Schema do
     embeds_one(:agent, Agent, on_replace: :update, defaults_to_struct: true)
     embeds_one(:agent_runtime, AgentRuntime, on_replace: :update, defaults_to_struct: true)
     embeds_one(:pi, Pi, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:auto_review, AutoReview, on_replace: :update, defaults_to_struct: true)
     embeds_one(:worker, Worker, on_replace: :update, defaults_to_struct: true)
     embeds_one(:hooks, Hooks, on_replace: :update, defaults_to_struct: true)
     embeds_one(:observability, Observability, on_replace: :update, defaults_to_struct: true)
@@ -317,6 +340,7 @@ defmodule SymphonyElixir.Config.Schema do
     |> cast_embed(:agent, with: &Agent.changeset/2)
     |> cast_embed(:agent_runtime, with: &AgentRuntime.changeset/2)
     |> cast_embed(:pi, with: &Pi.changeset/2)
+    |> cast_embed(:auto_review, with: &AutoReview.changeset/2)
     |> cast_embed(:worker, with: &Worker.changeset/2)
     |> cast_embed(:hooks, with: &Hooks.changeset/2)
     |> cast_embed(:observability, with: &Observability.changeset/2)
@@ -348,7 +372,13 @@ defmodule SymphonyElixir.Config.Schema do
         extension_dir: resolved_extension_dir
     }
 
-    %{settings | tracker: tracker, workspace: workspace, pi: pi}
+    auto_review = %{
+      settings.auto_review
+      | model: resolve_env_value(settings.auto_review.model, nil),
+        thinking: resolve_env_value(settings.auto_review.thinking, nil)
+    }
+
+    %{settings | tracker: tracker, workspace: workspace, pi: pi, auto_review: auto_review}
   end
 
   defp normalize_keys(value) when is_map(value) do
@@ -396,6 +426,8 @@ defmodule SymphonyElixir.Config.Schema do
         path
     end
   end
+
+  defp resolve_env_value(nil, fallback), do: fallback
 
   defp resolve_env_value(value, fallback) when is_binary(value) do
     case env_reference_name(value) do
