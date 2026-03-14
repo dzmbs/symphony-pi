@@ -26,6 +26,51 @@ defmodule SymphonyElixir.Pi.ToolBridgeTest do
     end
   end
 
+  defmodule SerialLinearClient do
+    def graphql(query, variables) do
+      config = Application.get_env(:symphony_elixir, __MODULE__, [])
+      atomics = Keyword.fetch!(config, :atomics)
+      sleep_ms = Keyword.get(config, :sleep_ms, 0)
+
+      current = :atomics.add_get(atomics, 1, 1)
+      update_max(atomics, current)
+
+      if recipient = config[:recipient] do
+        send(recipient, {:serial_graphql_called, query, variables, current})
+      end
+
+      Process.sleep(sleep_ms)
+      :atomics.sub_get(atomics, 1, 1)
+
+      cond do
+        String.contains?(query, "commentCreate") ->
+          {:ok, %{"data" => %{"commentCreate" => %{"success" => true}}}}
+
+        String.contains?(query, "commentUpdate") ->
+          {:ok, %{"data" => %{"commentUpdate" => %{"success" => true}}}}
+
+        String.contains?(query, "comments(first: 50)") ->
+          {:ok, %{"data" => %{"issue" => %{"comments" => %{"nodes" => []}}}}}
+
+        true ->
+          {:ok, %{"data" => %{}}}
+      end
+    end
+
+    defp update_max(atomics, current) do
+      max = :atomics.get(atomics, 2)
+
+      if current > max do
+        case :atomics.compare_exchange(atomics, 2, max, current) do
+          ^max -> :ok
+          _ -> update_max(atomics, current)
+        end
+      else
+        :ok
+      end
+    end
+  end
+
   setup do
     previous = Application.get_env(:symphony_elixir, :linear_client_module)
     previous_fake = Application.get_env(:symphony_elixir, FakeLinearClient)
@@ -195,6 +240,94 @@ defmodule SymphonyElixir.Pi.ToolBridgeTest do
       assert lookup_query =~ "comments(first: 50)"
       assert_receive {:graphql_called, update_query, %{body: "## Agent Workpad\nnew body", commentId: "comment-7"}}
       assert update_query =~ "commentUpdate"
+
+      ToolBridge.stop(pid)
+    end
+
+    test "serializes concurrent linear_graphql requests" do
+      previous = Application.get_env(:symphony_elixir, :linear_client_module)
+      atomics = :atomics.new(2, [])
+
+      Application.put_env(:symphony_elixir, :linear_client_module, SerialLinearClient)
+      Application.put_env(:symphony_elixir, SerialLinearClient, recipient: self(), atomics: atomics, sleep_ms: 75)
+
+      on_exit(fn ->
+        if is_nil(previous) do
+          Application.delete_env(:symphony_elixir, :linear_client_module)
+        else
+          Application.put_env(:symphony_elixir, :linear_client_module, previous)
+        end
+
+        Application.delete_env(:symphony_elixir, SerialLinearClient)
+      end)
+
+      write_workflow_file!(SymphonyElixir.Workflow.workflow_file_path())
+
+      {:ok, pid, port} = ToolBridge.start_link()
+
+      task1 =
+        Task.async(fn ->
+          Req.post!("http://127.0.0.1:#{port}/linear_graphql",
+            json: %{"query" => "query First { viewer { id } }"},
+            headers: [{"content-type", "application/json"}]
+          )
+        end)
+
+      task2 =
+        Task.async(fn ->
+          Req.post!("http://127.0.0.1:#{port}/linear_graphql",
+            json: %{"query" => "query Second { viewer { id } }"},
+            headers: [{"content-type", "application/json"}]
+          )
+        end)
+
+      assert %Req.Response{status: 200} = Task.await(task1, 1_000)
+      assert %Req.Response{status: 200} = Task.await(task2, 1_000)
+      assert :atomics.get(atomics, 2) == 1
+
+      ToolBridge.stop(pid)
+    end
+
+    test "serializes concurrent sync_workpad requests for the same issue" do
+      previous = Application.get_env(:symphony_elixir, :linear_client_module)
+      atomics = :atomics.new(2, [])
+
+      Application.put_env(:symphony_elixir, :linear_client_module, SerialLinearClient)
+      Application.put_env(:symphony_elixir, SerialLinearClient, recipient: self(), atomics: atomics, sleep_ms: 75)
+
+      on_exit(fn ->
+        if is_nil(previous) do
+          Application.delete_env(:symphony_elixir, :linear_client_module)
+        else
+          Application.put_env(:symphony_elixir, :linear_client_module, previous)
+        end
+
+        Application.delete_env(:symphony_elixir, SerialLinearClient)
+      end)
+
+      write_workflow_file!(SymphonyElixir.Workflow.workflow_file_path())
+
+      {:ok, pid, port} = ToolBridge.start_link()
+
+      task1 =
+        Task.async(fn ->
+          Req.post!("http://127.0.0.1:#{port}/sync_workpad",
+            json: %{"issue_id" => "issue-serial", "body" => "## Agent Workpad\nfirst"},
+            headers: [{"content-type", "application/json"}]
+          )
+        end)
+
+      task2 =
+        Task.async(fn ->
+          Req.post!("http://127.0.0.1:#{port}/sync_workpad",
+            json: %{"issue_id" => "issue-serial", "body" => "## Agent Workpad\nsecond"},
+            headers: [{"content-type", "application/json"}]
+          )
+        end)
+
+      assert %Req.Response{status: 200} = Task.await(task1, 1_000)
+      assert %Req.Response{status: 200} = Task.await(task2, 1_000)
+      assert :atomics.get(atomics, 2) == 1
 
       ToolBridge.stop(pid)
     end

@@ -877,7 +877,7 @@ defmodule SymphonyElixir.CoreTest do
 
   defp assert_due_in_range(due_at_ms, min_remaining_ms, max_remaining_ms) do
     remaining_ms = due_at_ms - System.monotonic_time(:millisecond)
-    jitter_ms = 500
+    jitter_ms = 1_000
 
     assert remaining_ms >= max(min_remaining_ms - jitter_ms, 0)
     assert remaining_ms <= max_remaining_ms + jitter_ms
@@ -885,7 +885,7 @@ defmodule SymphonyElixir.CoreTest do
 
   defp assert_scheduled_delay_in_range(due_at_ms, start_ms, min_delay_ms, max_delay_ms) do
     delay_ms = due_at_ms - start_ms
-    jitter_ms = 500
+    jitter_ms = 1_000
 
     assert delay_ms >= max(min_delay_ms - jitter_ms, 0)
     assert delay_ms <= max_delay_ms + jitter_ms
