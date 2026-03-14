@@ -196,7 +196,7 @@ defmodule SymphonyElixir.CLITest do
 
     assert {:error, message} = CLI.evaluate([@ack_flag, repo_path], deps)
     assert message =~ "No `WORKFLOW.md` found in repo"
-    assert message =~ "symphony setup #{repo_path}"
+    assert message =~ "symphony-pi setup #{repo_path}"
     assert message =~ Path.join(repo_path, "WORKFLOW.md")
   end
 

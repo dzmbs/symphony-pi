@@ -7,10 +7,10 @@ description: Set up Symphony Pi for a repository by checking Pi/GitHub/Linear pr
 
 Set up Symphony Pi for a target repository.
 
-If the terminal `symphony` CLI is available, prefer:
+If the terminal `symphony-pi` CLI is available, prefer:
 
 ```bash
-./bin/symphony setup /path/to/target-repo
+symphony-pi setup /path/to/target-repo
 ```
 
 That command is the recommended onboarding path because it:
@@ -41,8 +41,8 @@ Run these first and stop if any fail:
 
 Notes:
 
-- `./bin/symphony setup` can prompt for `LINEAR_API_KEY`; it does not have to be pre-exported.
-- If `pi` is missing, `./bin/symphony setup` can offer to install it.
+- `symphony-pi setup` can prompt for `LINEAR_API_KEY`; it does not have to be pre-exported.
+- If `pi` is missing, `symphony-pi setup` can offer to install it.
 
 ## Install Symphony Pi
 
@@ -52,6 +52,7 @@ Build the service from the Symphony Pi repo:
 cd /path/to/symphony-pi
 mix setup
 mix build
+mix install_cli
 ```
 
 ## Prepare the target repo
@@ -127,7 +128,7 @@ Run Symphony Pi from the Symphony Pi repo, pointing at the target repo workflow:
 
 ```bash
 cd /path/to/symphony-pi
-./bin/symphony /path/to/target-repo/WORKFLOW.md \
+symphony-pi /path/to/target-repo/WORKFLOW.md \
   --i-understand-that-this-will-be-running-without-the-usual-guardrails \
   --port 4050
 ```
@@ -135,7 +136,7 @@ cd /path/to/symphony-pi
 Temporary runtime overrides for a single process:
 
 ```bash
-./bin/symphony /path/to/target-repo/WORKFLOW.md \
+symphony-pi /path/to/target-repo/WORKFLOW.md \
   --i-understand-that-this-will-be-running-without-the-usual-guardrails \
   --pi-model anthropic/claude-opus-4-6 \
   --auto-review \

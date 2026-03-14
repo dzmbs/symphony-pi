@@ -81,6 +81,7 @@ defmodule SymphonyElixir.MixProject do
     [
       setup: ["deps.get"],
       build: ["escript.build"],
+      install_cli: ["escript.install --force"],
       lint: ["specs.check", "credo --strict"]
     ]
   end
@@ -89,8 +90,8 @@ defmodule SymphonyElixir.MixProject do
     [
       app: nil,
       main_module: SymphonyElixir.CLI,
-      name: "symphony",
-      path: "bin/symphony"
+      name: "symphony-pi",
+      path: "bin/symphony-pi"
     ]
   end
 end

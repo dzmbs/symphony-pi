@@ -1,6 +1,6 @@
 defmodule SymphonyElixir.CLI do
   @moduledoc """
-  Escript entrypoint for running Symphony with an explicit WORKFLOW.md path.
+  Escript entrypoint for running Symphony Pi with an explicit WORKFLOW.md path.
   """
 
   alias SymphonyElixir.{LogFile, Pi.Preflight, Setup, Workflow}
@@ -105,7 +105,7 @@ defmodule SymphonyElixir.CLI do
 
   @spec usage_message() :: String.t()
   defp usage_message do
-    "Usage: symphony setup <repo-path>\n   or: symphony [--logs-root <path>] [--port <port>] [--pi-model <model>] [--pi-thinking <level>] [--auto-review | --no-auto-review] [--review-model <model>] [--review-thinking <level>] [path-to-WORKFLOW.md]"
+    "Usage: symphony-pi setup <repo-path>\n   or: symphony-pi [--logs-root <path>] [--port <port>] [--pi-model <model>] [--pi-thinking <level>] [--auto-review | --no-auto-review] [--review-model <model>] [--review-thinking <level>] [path-to-WORKFLOW.md]"
   end
 
   @spec runtime_deps() :: deps()
@@ -138,10 +138,10 @@ defmodule SymphonyElixir.CLI do
         "No `WORKFLOW.md` found in repo: #{original_path}",
         "",
         "Start with setup:",
-        "  symphony setup #{original_path}",
+        "  symphony-pi setup #{original_path}",
         "",
         "Then run Symphony against the generated workflow file:",
-        "  symphony #{Path.join(original_path, "WORKFLOW.md")} " <>
+        "  symphony-pi #{Path.join(original_path, "WORKFLOW.md")} " <>
           "--i-understand-that-this-will-be-running-without-the-usual-guardrails"
       ]
       |> Enum.join("\n")

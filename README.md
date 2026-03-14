@@ -35,8 +35,15 @@ mise trust
 mise install
 mise exec -- mix setup
 mise exec -- mix build
+mise exec -- mix install_cli
 
-./bin/symphony setup /path/to/your-repo
+symphony-pi setup /path/to/your-repo
+```
+
+If you prefer not to install the CLI into `PATH`, use the built escript directly:
+
+```bash
+./bin/symphony-pi setup /path/to/your-repo
 ```
 
 The setup command does the first-pass onboarding for you:
@@ -64,11 +71,11 @@ project, move it to `Todo`, and watch the dashboard at `http://127.0.0.1:4050`.
 1. Make sure your codebase is set up to work well with agents: see
    [Harness engineering](https://openai.com/index/harness-engineering/).
 2. Get a new personal token in Linear via Settings → Security & access → Personal API keys.
-   If `LINEAR_API_KEY` is not already set, `./bin/symphony setup` will prompt for it.
+   If `LINEAR_API_KEY` is not already set, `symphony-pi setup` will prompt for it.
 3. Run onboarding:
 
 ```bash
-./bin/symphony setup /path/to/your-repo
+symphony-pi setup /path/to/your-repo
 ```
 
 4. Customize the generated `WORKFLOW.md` only if your project needs something beyond the detected defaults.
@@ -95,24 +102,24 @@ mise trust
 mise install
 mise exec -- mix setup
 mise exec -- mix build
-mise exec -- ./bin/symphony ./WORKFLOW.md
+mise exec -- ./bin/symphony-pi ./WORKFLOW.md
 ```
 
 For real use on another repo, prefer:
 
 ```bash
-./bin/symphony setup /path/to/your-repo
-./bin/symphony /path/to/your-repo/WORKFLOW.md \
+symphony-pi setup /path/to/your-repo
+symphony-pi /path/to/your-repo/WORKFLOW.md \
   --i-understand-that-this-will-be-running-without-the-usual-guardrails \
   --port 4050
 ```
 
 ## Configuration
 
-Pass a custom workflow file path to `./bin/symphony` when starting the service:
+Pass a custom workflow file path to `symphony-pi` when starting the service:
 
 ```bash
-./bin/symphony /path/to/custom/WORKFLOW.md
+symphony-pi /path/to/custom/WORKFLOW.md
 ```
 
 If no path is passed, Symphony defaults to `./WORKFLOW.md`.
@@ -137,7 +144,7 @@ Optional flags:
 - `--review-thinking` temporarily overrides `auto_review.thinking`
 
 If you pass a repo path instead of a workflow file path and that repo does not contain
-`WORKFLOW.md`, Symphony Pi will tell you to run `./bin/symphony setup /path/to/repo` first.
+`WORKFLOW.md`, Symphony Pi will tell you to run `symphony-pi setup /path/to/repo` first.
 
 The `WORKFLOW.md` file uses YAML front matter for configuration, plus a Markdown body used as the
 agent session prompt.
@@ -292,7 +299,7 @@ Behavior:
 If you want to experiment without editing `WORKFLOW.md`, use process-level overrides:
 
 ```bash
-./bin/symphony /path/to/WORKFLOW.md \
+symphony-pi /path/to/WORKFLOW.md \
   --pi-model anthropic/claude-opus-4-6 \
   --auto-review \
   --review-model openai/gpt-5.4
@@ -421,7 +428,7 @@ actively running subagents, which is very useful during development.
 Run:
 
 ```bash
-./bin/symphony setup /path/to/your-repo
+symphony-pi setup /path/to/your-repo
 ```
 
 That is the recommended onboarding path now.
