@@ -227,6 +227,7 @@ defmodule SymphonyElixir.AgentRunner do
 
       true ->
         send_agent_update(update_recipient, issue, auto_review_update("auto-review started"))
+
         run_review_pass(backend, workspace, issue, update_recipient, opts, settings)
         |> handle_auto_review_result(
           backend,
@@ -349,12 +350,10 @@ defmodule SymphonyElixir.AgentRunner do
          _opts,
          issue_state_fetcher,
          _max_turns,
-       _rework_pass,
-       _settings
+         _rework_pass,
+         _settings
        ) do
-    Logger.info(
-      "Auto-review passed for #{issue_context(issue)} summary=#{inspect(verdict.summary)}"
-    )
+    Logger.info("Auto-review passed for #{issue_context(issue)} summary=#{inspect(verdict.summary)}")
 
     handle_review_pass(issue, issue_state_fetcher, update_recipient, session)
   end

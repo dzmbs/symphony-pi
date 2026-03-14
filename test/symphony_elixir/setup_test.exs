@@ -293,6 +293,7 @@ defmodule SymphonyElixir.SetupTest do
     repo_root = temp_dir("repo")
 
     File.write!(Path.join(source_root, "package.json"), ~s({"name": "symphony-pi"}))
+
     deps = %{
       current_dir: fn -> source_root end,
       expand_path: &Path.expand/1,
