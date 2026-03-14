@@ -67,6 +67,12 @@ The setup command does the first-pass onboarding for you:
 - optionally creates a minimal `AGENTS.md`
 - prints the exact command to start Symphony Pi for that repo
 
+The installed Pi package also includes reusable skills such as:
+
+- `symphony-readiness` to improve a repo's agent legibility without forcing boilerplate
+- `linear-ticket` to turn rough user input into Symphony-friendly Linear issues
+- `linear`, `pull`, `push`, `commit`, and `land` for common orchestration tasks
+
 Then start the service with the command it prints, create one small Linear issue in the configured
 project, move it to `Todo`, and watch the dashboard at `http://127.0.0.1:4050`.
 
