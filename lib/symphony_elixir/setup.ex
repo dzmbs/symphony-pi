@@ -85,13 +85,15 @@ defmodule SymphonyElixir.Setup do
       nodes {
         name
         slugId
-        team {
-          name
-          key
-          states(first: 50) {
-            nodes {
-              name
-              type
+        teams(first: 10) {
+          nodes {
+            name
+            key
+            states(first: 50) {
+              nodes {
+                name
+                type
+              }
             }
           }
         }
@@ -105,13 +107,15 @@ defmodule SymphonyElixir.Setup do
       nodes {
         name
         slugId
-        team {
-          name
-          key
-          states(first: 50) {
-            nodes {
-              name
-              type
+        teams(first: 10) {
+          nodes {
+            name
+            key
+            states(first: 50) {
+              nodes {
+                name
+                type
+              }
             }
           }
         }
@@ -501,7 +505,7 @@ defmodule SymphonyElixir.Setup do
     deps.io_puts.("Run Symphony Pi with:")
 
     deps.io_puts.(
-      "./bin/symphony #{repo_root} " <>
+      "./bin/symphony-pi #{repo_root} " <>
         "--i-understand-that-this-will-be-running-without-the-usual-guardrails --port 4050"
     )
   end
@@ -767,8 +771,8 @@ defmodule SymphonyElixir.Setup do
     "#{project_team_name(project)} / #{project["name"]} (#{project["slugId"]})"
   end
 
-  defp project_team_name(%{"team" => %{"name" => name}}) when is_binary(name) and name != "", do: name
-  defp project_team_name(%{"team" => %{"key" => key}}) when is_binary(key) and key != "", do: key
+  defp project_team_name(%{"teams" => %{"nodes" => [team | _]}}), do: team_name(team)
+  defp project_team_name(%{"team" => team}), do: team_name(team)
   defp project_team_name(_project), do: "Unknown team"
 
   defp list_linear_projects(token) when is_binary(token) do
@@ -861,13 +865,10 @@ defmodule SymphonyElixir.Setup do
   defp validate_required_states(%{"slugId" => slug} = project) do
     available_states =
       project
-      |> get_in(["team", "states", "nodes"])
-      |> case do
-        nil -> []
-        states -> states
-      end
+      |> project_state_nodes()
       |> Enum.map(& &1["name"])
       |> Enum.filter(&is_binary/1)
+      |> Enum.uniq()
 
     missing_states = Enum.reject(@required_workflow_states, &(&1 in available_states))
 
@@ -877,7 +878,7 @@ defmodule SymphonyElixir.Setup do
       {:error,
        "Selected Linear project #{inspect(slug)} is missing required workflow states: " <>
          Enum.join(missing_states, ", ") <>
-         ". Add them in Linear Team Settings -> Workflow and rerun `symphony setup`."}
+         ". Add them in Linear Team Settings -> Workflow and rerun `symphony-pi setup`."}
     end
   end
 
@@ -887,6 +888,21 @@ defmodule SymphonyElixir.Setup do
   end
 
   defp valid_project_node?(_node), do: false
+
+  defp project_state_nodes(%{"teams" => %{"nodes" => teams}}) when is_list(teams) do
+    teams
+    |> Enum.flat_map(fn
+      %{"states" => %{"nodes" => states}} when is_list(states) -> states
+      _ -> []
+    end)
+  end
+
+  defp project_state_nodes(%{"team" => %{"states" => %{"nodes" => states}}}) when is_list(states), do: states
+  defp project_state_nodes(_project), do: []
+
+  defp team_name(%{"name" => name}) when is_binary(name) and name != "", do: name
+  defp team_name(%{"key" => key}) when is_binary(key) and key != "", do: key
+  defp team_name(_team), do: "Unknown team"
 
   defp ensure_linear_api_key(repo_root, deps) do
     case deps.get_env.("LINEAR_API_KEY") do
@@ -922,7 +938,7 @@ defmodule SymphonyElixir.Setup do
         :ok
       else
         {:ok, false} ->
-          {:error, "Pi is required for Symphony Pi setup. Install it and rerun `symphony setup`."}
+          {:error, "Pi is required for Symphony Pi setup. Install it and rerun `symphony-pi setup`."}
 
         {:error, reason} ->
           {:error, reason}
@@ -1040,7 +1056,7 @@ defmodule SymphonyElixir.Setup do
         prompt_provider_login(provider, deps)
 
       true ->
-        {:error, "Provider #{provider} is not authenticated. Configure it in Pi first, then rerun `symphony setup`."}
+        {:error, "Provider #{provider} is not authenticated. Configure it in Pi first, then rerun `symphony-pi setup`."}
     end
   end
 

@@ -386,9 +386,13 @@ defmodule SymphonyElixir.SetupTest do
     %{
       "name" => name,
       "slugId" => slug,
-      "team" => %{
-        "name" => "Core",
-        "states" => %{"nodes" => @required_states}
+      "teams" => %{
+        "nodes" => [
+          %{
+            "name" => "Core",
+            "states" => %{"nodes" => @required_states}
+          }
+        ]
       }
     }
   end
