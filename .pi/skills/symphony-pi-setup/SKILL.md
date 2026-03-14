@@ -7,6 +7,23 @@ description: Set up Symphony Pi for a repository by checking Pi/GitHub/Linear pr
 
 Set up Symphony Pi for a target repository.
 
+If the terminal `symphony` CLI is available, prefer:
+
+```bash
+./bin/symphony setup /path/to/target-repo
+```
+
+That command is the recommended onboarding path because it:
+
+- checks that `pi` is installed
+- fetches the real available models from Pi
+- installs the project-local Symphony Pi package
+- writes `WORKFLOW.md`
+- optionally writes a minimal `AGENTS.md`
+
+Use this skill when you want the same setup flow from inside a Pi session or when you need to
+adjust the generated files afterward.
+
 ## Preflight checks
 
 Run these first and stop if any fail:
@@ -74,7 +91,7 @@ Optional review block:
 ```yaml
 auto_review:
   enabled: true
-  model: openai/gpt-5
+  model: openai/gpt-5.4
   thinking: medium
   max_rework_passes: 1
   fresh_session: true
@@ -82,7 +99,7 @@ auto_review:
 
 Notes:
 
-- configured implementation and review models are validated against the local `pi` installation at startup
+- configured implementation and review models are fetched from and validated against the local `pi` installation at startup
 - the review pass is internal to Symphony Pi; it drives `Rework` vs `Human Review`, but does not yet post GitHub PR review comments automatically
 - the review stage uses a fresh Pi session and a restricted review tool profile by default
 
@@ -112,7 +129,7 @@ Temporary runtime overrides for a single process:
   --i-understand-that-this-will-be-running-without-the-usual-guardrails \
   --pi-model anthropic/claude-opus-4-6 \
   --auto-review \
-  --review-model openai/gpt-5
+  --review-model openai/gpt-5.4
 ```
 
 Use this when you want:

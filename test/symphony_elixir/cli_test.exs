@@ -9,6 +9,7 @@ defmodule SymphonyElixir.CLITest do
     parent = self()
 
     deps = %{
+      run_setup: fn _repo -> flunk("setup should not run") end,
       file_regular?: fn _path ->
         send(parent, :file_checked)
         true
@@ -55,6 +56,7 @@ defmodule SymphonyElixir.CLITest do
 
   test "defaults to WORKFLOW.md when workflow path is missing" do
     deps = %{
+      run_setup: fn _repo -> flunk("setup should not run") end,
       file_regular?: fn path -> Path.basename(path) == "WORKFLOW.md" end,
       load_dotenv: fn _path -> :ok end,
       set_workflow_file_path: fn _path -> :ok end,
@@ -73,6 +75,7 @@ defmodule SymphonyElixir.CLITest do
     expanded_path = Path.expand(workflow_path)
 
     deps = %{
+      run_setup: fn _repo -> flunk("setup should not run") end,
       file_regular?: fn path ->
         send(parent, {:workflow_checked, path})
         path == expanded_path
@@ -105,6 +108,7 @@ defmodule SymphonyElixir.CLITest do
     parent = self()
 
     deps = %{
+      run_setup: fn _repo -> flunk("setup should not run") end,
       file_regular?: fn _path -> true end,
       load_dotenv: fn _path -> :ok end,
       set_workflow_file_path: fn _path -> :ok end,
@@ -124,6 +128,7 @@ defmodule SymphonyElixir.CLITest do
 
   test "returns not found when workflow file does not exist" do
     deps = %{
+      run_setup: fn _repo -> flunk("setup should not run") end,
       file_regular?: fn _path -> false end,
       load_dotenv: fn _path -> :ok end,
       set_workflow_file_path: fn _path -> :ok end,
@@ -139,6 +144,7 @@ defmodule SymphonyElixir.CLITest do
 
   test "returns startup error when app cannot start" do
     deps = %{
+      run_setup: fn _repo -> flunk("setup should not run") end,
       file_regular?: fn _path -> true end,
       load_dotenv: fn _path -> :ok end,
       set_workflow_file_path: fn _path -> :ok end,
@@ -155,6 +161,7 @@ defmodule SymphonyElixir.CLITest do
 
   test "returns workflow validation errors before startup" do
     deps = %{
+      run_setup: fn _repo -> flunk("setup should not run") end,
       file_regular?: fn _path -> true end,
       load_dotenv: fn _path -> :ok end,
       set_workflow_file_path: fn _path -> :ok end,
@@ -170,6 +177,7 @@ defmodule SymphonyElixir.CLITest do
 
   test "returns ok when workflow exists and app starts" do
     deps = %{
+      run_setup: fn _repo -> flunk("setup should not run") end,
       file_regular?: fn _path -> true end,
       load_dotenv: fn _path -> :ok end,
       set_workflow_file_path: fn _path -> :ok end,
@@ -204,6 +212,7 @@ defmodule SymphonyElixir.CLITest do
     System.delete_env("CUSTOM_FLAG")
 
     deps = %{
+      run_setup: fn _repo -> flunk("setup should not run") end,
       file_regular?: &File.regular?/1,
       load_dotenv: fn path ->
         send(self(), {:dotenv_callback, path})
@@ -231,6 +240,7 @@ defmodule SymphonyElixir.CLITest do
     parent = self()
 
     deps = %{
+      run_setup: fn _repo -> flunk("setup should not run") end,
       file_regular?: fn _path -> true end,
       load_dotenv: fn _path -> :ok end,
       set_workflow_file_path: fn _path -> :ok end,
@@ -273,6 +283,7 @@ defmodule SymphonyElixir.CLITest do
     parent = self()
 
     deps = %{
+      run_setup: fn _repo -> flunk("setup should not run") end,
       file_regular?: fn _path -> true end,
       load_dotenv: fn _path -> :ok end,
       set_workflow_file_path: fn _path -> :ok end,
@@ -288,6 +299,20 @@ defmodule SymphonyElixir.CLITest do
 
     assert :ok = CLI.evaluate([@ack_flag, "--no-auto-review", "WORKFLOW.md"], deps)
     assert_received {:runtime_overrides, %{auto_review: %{enabled: false}}}
+  end
+
+  test "dispatches setup subcommand without requiring the guardrails acknowledgement flag" do
+    parent = self()
+
+    deps = %{
+      run_setup: fn repo ->
+        send(parent, {:setup_repo, repo})
+        :ok
+      end
+    }
+
+    assert :ok = CLI.evaluate(["setup", "/tmp/project-a"], deps)
+    assert_received {:setup_repo, "/tmp/project-a"}
   end
 
   defp restore_env(name, nil), do: System.delete_env(name)

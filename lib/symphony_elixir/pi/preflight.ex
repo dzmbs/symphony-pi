@@ -53,7 +53,8 @@ defmodule SymphonyElixir.Pi.Preflight do
   defp auto_review_model(%{auto_review: %{enabled: true, model: model}}), do: model
   defp auto_review_model(_settings), do: nil
 
-  defp available_model_ids(command) do
+  @spec available_model_ids(String.t()) :: {:ok, MapSet.t(String.t())} | {:error, term()}
+  def available_model_ids(command) when is_binary(command) do
     temp_dir =
       Path.join(System.tmp_dir!(), "symphony-pi-model-preflight-#{System.unique_integer([:positive])}")
 

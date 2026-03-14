@@ -3,7 +3,7 @@ defmodule SymphonyElixir.CLI do
   Escript entrypoint for running Symphony with an explicit WORKFLOW.md path.
   """
 
-  alias SymphonyElixir.{LogFile, Pi.Preflight, Workflow}
+  alias SymphonyElixir.{LogFile, Pi.Preflight, Setup, Workflow}
 
   @acknowledgement_switch :i_understand_that_this_will_be_running_without_the_usual_guardrails
 
@@ -25,6 +25,7 @@ defmodule SymphonyElixir.CLI do
           load_dotenv: (String.t() -> :ok),
           set_workflow_file_path: (String.t() -> :ok | {:error, term()}),
           set_runtime_overrides: (map() -> :ok),
+          run_setup: (String.t() -> :ok | {:error, String.t()}),
           validate_workflow: (-> :ok | {:error, String.t()}),
           set_logs_root: (String.t() -> :ok | {:error, term()}),
           set_server_port_override: (non_neg_integer() | nil -> :ok | {:error, term()}),
@@ -45,6 +46,16 @@ defmodule SymphonyElixir.CLI do
 
   @spec evaluate([String.t()], deps()) :: :ok | {:error, String.t()}
   def evaluate(args, deps \\ runtime_deps()) do
+    case args do
+      ["setup", repo_path] ->
+        deps.run_setup.(repo_path)
+
+      _ ->
+        evaluate_run_command(args, deps)
+    end
+  end
+
+  defp evaluate_run_command(args, deps) do
     case OptionParser.parse(args, strict: @switches) do
       {opts, [], []} ->
         with :ok <- require_guardrails_acknowledgement(opts),
@@ -86,7 +97,7 @@ defmodule SymphonyElixir.CLI do
 
   @spec usage_message() :: String.t()
   defp usage_message do
-    "Usage: symphony [--logs-root <path>] [--port <port>] [--pi-model <model>] [--pi-thinking <level>] [--auto-review | --no-auto-review] [--review-model <model>] [--review-thinking <level>] [path-to-WORKFLOW.md]"
+    "Usage: symphony setup <repo-path>\n   or: symphony [--logs-root <path>] [--port <port>] [--pi-model <model>] [--pi-thinking <level>] [--auto-review | --no-auto-review] [--review-model <model>] [--review-thinking <level>] [path-to-WORKFLOW.md]"
   end
 
   @spec runtime_deps() :: deps()
@@ -96,6 +107,7 @@ defmodule SymphonyElixir.CLI do
       load_dotenv: &load_dotenv_for_workflow/1,
       set_workflow_file_path: &Workflow.set_workflow_file_path/1,
       set_runtime_overrides: &SymphonyElixir.Config.set_runtime_overrides/1,
+      run_setup: &Setup.run/1,
       validate_workflow: &Preflight.validate_workflow/0,
       set_logs_root: &set_logs_root/1,
       set_server_port_override: &set_server_port_override/1,

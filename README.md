@@ -24,29 +24,54 @@ conventions.
 If a claimed issue moves to a terminal state (`Done`, `Closed`, `Cancelled`, or `Duplicate`),
 Symphony stops the active agent for that issue and cleans up matching workspaces.
 
+## Quick Start
+
+For a new repository, the recommended path is:
+
+```bash
+git clone https://github.com/dzmbs/symphony-pi
+cd symphony-pi
+mise trust
+mise install
+mise exec -- mix setup
+mise exec -- mix build
+
+export LINEAR_API_KEY=...
+./bin/symphony setup /path/to/your-repo
+```
+
+The setup command does the first-pass onboarding for you:
+
+- checks that the target path is a git repo with an `origin`
+- checks that `pi` is installed and fails early if it is missing
+- fetches the actual available models from your local Pi installation
+- installs the Symphony Pi project-local Pi package into the target repo
+- writes a working `WORKFLOW.md`
+- optionally creates a minimal `AGENTS.md`
+- prints the exact command to start Symphony Pi for that repo
+
+Then start the service with the command it prints, create one small Linear issue in the configured
+project, move it to `Todo`, and watch the dashboard at `http://127.0.0.1:4050`.
+
 ## How to use it
 
 1. Make sure your codebase is set up to work well with agents: see
    [Harness engineering](https://openai.com/index/harness-engineering/).
 2. Get a new personal token in Linear via Settings → Security & access → Personal API keys, and
    set it as the `LINEAR_API_KEY` environment variable.
-3. Decide how your target repo will get Symphony Pi's Pi-native context files:
-   - Recommended: install this repo's bundled Pi skills into the target repo with
-     `pi install -l git:github.com/dzmbs/symphony-pi`
-   - For guided onboarding, use the bundled `symphony-pi-setup` skill in the target repo after install
-   - Alternative: copy `.pi/skills/` into the target repo and adapt the skill text there
-   - If you want repo-specific coding rules for interactive Pi sessions, also copy or adapt
-     `AGENTS.md`
-4. Copy this directory's `WORKFLOW.md` to your repo.
-   - Symphony Pi provides `linear_graphql` automatically during orchestrated runs. A configured
-     Linear MCP server is also acceptable.
-5. Customize the copied `WORKFLOW.md` file for your project.
+3. Run onboarding:
+
+```bash
+./bin/symphony setup /path/to/your-repo
+```
+
+4. Customize the generated `WORKFLOW.md` only if your project needs something beyond the detected defaults.
    - To get your project's slug, right-click the project and copy its URL. The slug is part of the
      URL.
    - When creating a workflow based on this repo, note that it depends on non-standard Linear
      issue statuses: "Rework", "Human Review", and "Merging". You can customize them in
      Team Settings → Workflow in Linear.
-6. Follow the instructions below to install the required runtime dependencies and start the service.
+5. Follow the instructions below to install the required runtime dependencies and start the service.
 
 ## Prerequisites
 
@@ -67,6 +92,15 @@ mise install
 mise exec -- mix setup
 mise exec -- mix build
 mise exec -- ./bin/symphony ./WORKFLOW.md
+```
+
+For real use on another repo, prefer:
+
+```bash
+./bin/symphony setup /path/to/your-repo
+./bin/symphony /path/to/your-repo/WORKFLOW.md \
+  --i-understand-that-this-will-be-running-without-the-usual-guardrails \
+  --port 4050
 ```
 
 ## Configuration
@@ -233,7 +267,7 @@ If you want an extra internal quality gate before the human sees the handoff, en
 ```yaml
 auto_review:
   enabled: true
-  model: openai/gpt-5
+  model: openai/gpt-5.4
   thinking: medium
   max_rework_passes: 1
   fresh_session: true
@@ -254,7 +288,7 @@ If you want to experiment without editing `WORKFLOW.md`, use process-level overr
 ./bin/symphony /path/to/WORKFLOW.md \
   --pi-model anthropic/claude-opus-4-6 \
   --auto-review \
-  --review-model openai/gpt-5
+  --review-model openai/gpt-5.4
 ```
 
 Those flags only affect the current Symphony Pi process.
@@ -377,8 +411,13 @@ actively running subagents, which is very useful during development.
 
 ### What's the easiest way to set this up for my own codebase?
 
-Clone this repo into a scratch directory, install the bundled Pi skill pack into your target repo,
-adapt `WORKFLOW.md`, and point `hooks.after_create` at your real repository.
+Run:
+
+```bash
+./bin/symphony setup /path/to/your-repo
+```
+
+That is the recommended onboarding path now.
 
 ## License
 

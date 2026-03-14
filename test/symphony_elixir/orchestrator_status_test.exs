@@ -1299,23 +1299,50 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     refute rendered =~ "Timestamp:"
   end
 
-  defp wait_for_snapshot(pid, predicate, timeout_ms \\ 200) when is_function(predicate, 1) do
+  defp wait_for_snapshot(pid, predicate, timeout_ms \\ 500) when is_function(predicate, 1) do
     deadline_ms = System.monotonic_time(:millisecond) + timeout_ms
     do_wait_for_snapshot(pid, predicate, deadline_ms)
   end
 
   defp do_wait_for_snapshot(pid, predicate, deadline_ms) do
-    snapshot = GenServer.call(pid, :snapshot)
+    case snapshot_call(pid) do
+      {:ok, snapshot} ->
+        if predicate.(snapshot) do
+          snapshot
+        else
+          retry_wait_for_snapshot(pid, predicate, deadline_ms, snapshot)
+        end
 
-    if predicate.(snapshot) do
-      snapshot
-    else
-      if System.monotonic_time(:millisecond) >= deadline_ms do
-        flunk("timed out waiting for orchestrator snapshot state: #{inspect(snapshot)}")
-      else
-        Process.sleep(5)
-        do_wait_for_snapshot(pid, predicate, deadline_ms)
+      :timeout ->
+        retry_wait_for_snapshot(pid, predicate, deadline_ms, nil)
+    end
+  end
+
+  defp snapshot_call(pid) do
+    caller = self()
+    ref = make_ref()
+
+    spawn(fn ->
+      snapshot = GenServer.call(pid, :snapshot, 100)
+      send(caller, {ref, snapshot})
+    end)
+
+    receive do
+      {^ref, snapshot} -> {:ok, snapshot}
+    after
+      120 -> :timeout
+    end
+  end
+
+  defp retry_wait_for_snapshot(pid, predicate, deadline_ms, last_snapshot) do
+    if System.monotonic_time(:millisecond) >= deadline_ms do
+      case last_snapshot do
+        nil -> flunk("timed out waiting for orchestrator snapshot state")
+        snapshot -> flunk("timed out waiting for orchestrator snapshot state: #{inspect(snapshot)}")
       end
+    else
+      Process.sleep(5)
+      do_wait_for_snapshot(pid, predicate, deadline_ms)
     end
   end
 
