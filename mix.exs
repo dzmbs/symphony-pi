@@ -117,7 +117,18 @@ defmodule SymphonyElixir.MixProject do
       #!/bin/sh
       set -eu
 
-      SELF=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+      SCRIPT="$0"
+
+      while [ -L "$SCRIPT" ]; do
+        TARGET=$(readlink "$SCRIPT")
+
+        case "$TARGET" in
+          /*) SCRIPT="$TARGET" ;;
+          *) SCRIPT="$(dirname "$SCRIPT")/$TARGET" ;;
+        esac
+      done
+
+      SELF=$(CDPATH= cd -- "$(dirname -- "$SCRIPT")" && pwd)
 
       exec "$SELF/#{runtime_script}" eval "SymphonyElixir.CLI.main(System.argv())" "$@"
       """
