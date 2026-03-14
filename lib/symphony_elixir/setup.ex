@@ -3,16 +3,18 @@ defmodule SymphonyElixir.Setup do
   Interactive onboarding for connecting a repository to Symphony Pi.
   """
 
-  alias SymphonyElixir.Pi.Preflight
+  alias SymphonyElixir.{AutoReview, Pi.Preflight}
 
   @linear_endpoint "https://api.linear.app/graphql"
-  @required_workflow_states ["Todo", "In Progress", "Rework", "Human Review", "Merging", "Done"]
+  @base_required_workflow_states ["Todo", "In Progress", "Rework", "Human Review", "Merging", "Done"]
   @default_workspace_root "~/code/symphony-workspaces"
   @default_pi_command "pi"
   @default_pi_package "@mariozechner/pi-coding-agent"
   @default_pi_thinking "high"
   @default_review_thinking "medium"
   @default_max_rework_passes 1
+  @minimum_tested_pi_version "0.56.2"
+  @recommended_pi_version "0.58.0"
   @default_active_states ["Todo", "In Progress", "Merging", "Rework"]
   @default_terminal_states ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
   @oauth_login_providers MapSet.new([
@@ -157,10 +159,11 @@ defmodule SymphonyElixir.Setup do
          workflow_path = Path.join(repo_root, "WORKFLOW.md"),
          {:ok, linear_api_key} <- ensure_linear_api_key(repo_root, deps),
          :ok <- ensure_pi_available(deps),
+         {:ok, pi_version} <- detect_pi_version(deps),
          {:ok, origin_url} <- origin_url(repo_root, deps),
          {:ok, models} <- available_models(deps),
          {:ok, projects} <- available_projects(linear_api_key, deps),
-         :ok <- print_setup_status(repo_root, origin_url, models, projects, workflow_path, deps),
+         :ok <- print_setup_status(repo_root, origin_url, pi_version, models, projects, workflow_path, deps),
          :ok <- maybe_confirm_workflow_overwrite(workflow_path, deps),
          {:ok, answers} <- collect_answers(linear_api_key, projects, models, deps),
          :ok <- ensure_model_credentials(repo_root, answers, deps),
@@ -257,7 +260,7 @@ defmodule SymphonyElixir.Setup do
     deps.io_puts.("Setup choices")
     deps.io_puts.("-------------")
 
-    with {:ok, project_slug} <- prompt_project_slug(linear_api_key, projects, deps),
+    with {:ok, {project_slug, project}} <- prompt_project_slug(linear_api_key, projects, deps),
          {:ok, workspace_root} <- prompt_with_default("Workspace root", @default_workspace_root, deps),
          {:ok, implementation_model} <-
            prompt_model_choice(
@@ -270,6 +273,7 @@ defmodule SymphonyElixir.Setup do
          {:ok, auto_review_enabled} <-
            prompt_yes_no("Enable optional internal auto-review before human handoff?", false, deps),
          {:ok, review_model} <- maybe_prompt_review_model(auto_review_enabled, models, implementation_model, deps),
+         :ok <- maybe_validate_selected_project(project, auto_review_enabled),
          {:ok, create_agents_file} <-
            prompt_yes_no("Create a minimal AGENTS.md starter for repo-specific coding guidance?", false, deps) do
       maybe_warn_missing_provider_auth(implementation_model, deps)
@@ -500,7 +504,7 @@ defmodule SymphonyElixir.Setup do
     end
 
     deps.io_puts.("")
-    deps.io_puts.("Required Linear states: Todo, In Progress, Rework, Human Review, Merging, Done")
+    deps.io_puts.("Required Linear states: #{required_workflow_states_label(answers.auto_review_enabled)}")
     deps.io_puts.("")
     deps.io_puts.("Run Symphony Pi with:")
 
@@ -564,9 +568,8 @@ defmodule SymphonyElixir.Setup do
   end
 
   defp prompt_project_slug(_linear_api_key, {:loaded, projects}, deps) when is_list(projects) do
-    with {:ok, project} <- prompt_project(projects, deps),
-         :ok <- validate_required_states(project) do
-      {:ok, project["slugId"]}
+    with {:ok, project} <- prompt_project(projects, deps) do
+      {:ok, {project["slugId"], project}}
     end
   end
 
@@ -576,7 +579,7 @@ defmodule SymphonyElixir.Setup do
     with {:ok, slug} <-
            prompt_required("Linear project slug (the part after /project/ in the Linear URL): ", deps),
          {:ok, project} <- maybe_validate_manual_project(linear_api_key, slug, deps) do
-      {:ok, Map.get(project, "slugId", slug)}
+      {:ok, {slug, project}}
     end
   end
 
@@ -587,15 +590,13 @@ defmodule SymphonyElixir.Setup do
         maybe_validate_manual_project_retry(linear_api_key, deps)
 
       {:ok, project} ->
-        with :ok <- validate_required_states(project) do
-          {:ok, project}
-        end
+        {:ok, project}
 
       {:error, reason} ->
         deps.io_puts.("! Could not validate required Linear states automatically.")
         deps.io_puts.("  Reason: #{format_projects_error(reason)}")
         deps.io_puts.("  Setup will continue with the slug you entered.")
-        {:ok, %{"slugId" => slug}}
+        {:ok, nil}
     end
   end
 
@@ -712,7 +713,7 @@ defmodule SymphonyElixir.Setup do
     end
   end
 
-  defp print_setup_status(repo_root, origin_url, models, projects, workflow_path, deps) do
+  defp print_setup_status(repo_root, origin_url, pi_version, models, projects, workflow_path, deps) do
     deps.io_puts.("")
     deps.io_puts.("Symphony Pi setup")
     deps.io_puts.("-----------------")
@@ -720,6 +721,7 @@ defmodule SymphonyElixir.Setup do
     deps.io_puts.("✓ Git origin found: #{origin_url}")
     deps.io_puts.("✓ LINEAR_API_KEY present")
     deps.io_puts.("✓ Pi executable found: #{@default_pi_command}")
+    print_pi_version_status(pi_version, deps)
     deps.io_puts.("✓ Loaded #{length(models)} model(s) from Pi")
     print_project_status(projects, deps)
 
@@ -757,6 +759,43 @@ defmodule SymphonyElixir.Setup do
     deps.io_puts.("! Could not load Linear projects automatically")
     deps.io_puts.("  Reason: #{reason}")
     deps.io_puts.("  Manual slug entry will be used")
+  end
+
+  defp detect_pi_version(deps) do
+    case deps.run_cmd.(@default_pi_command, ["--version"], stderr_to_stdout: true) do
+      {output, 0} ->
+        {:ok, parse_pi_version(output)}
+
+      {_output, _code} ->
+        {:ok, nil}
+    end
+  end
+
+  defp parse_pi_version(output) when is_binary(output) do
+    case Regex.run(~r/(\d+\.\d+\.\d+)/, output, capture: :all_but_first) do
+      [version] -> version
+      _ -> nil
+    end
+  end
+
+  defp print_pi_version_status(nil, deps) do
+    deps.io_puts.("! Could not determine Pi version automatically")
+    deps.io_puts.("  Tested with pi #{@minimum_tested_pi_version}+; recommended #{@recommended_pi_version}+")
+  end
+
+  defp print_pi_version_status(version, deps) when is_binary(version) do
+    deps.io_puts.("✓ Pi version detected: #{version}")
+
+    case Version.compare(version, @recommended_pi_version) do
+      :lt ->
+        deps.io_puts.(
+          "! Symphony Pi works best with pi #{@recommended_pi_version}+ " <>
+            "(detected #{version}; tested with #{@minimum_tested_pi_version}+)"
+        )
+
+      _ ->
+        :ok
+    end
   end
 
   defp project_sort_key(project) do
@@ -862,7 +901,13 @@ defmodule SymphonyElixir.Setup do
   defp manual_project_fallback_allowed?({:linear_graphql_errors, _errors}), do: true
   defp manual_project_fallback_allowed?(_reason), do: false
 
-  defp validate_required_states(%{"slugId" => slug} = project) do
+  defp maybe_validate_selected_project(nil, _auto_review_enabled), do: :ok
+
+  defp maybe_validate_selected_project(%{"slugId" => _slug} = project, auto_review_enabled) do
+    validate_required_states(project, auto_review_enabled)
+  end
+
+  defp validate_required_states(%{"slugId" => slug} = project, auto_review_enabled) do
     available_states =
       project
       |> project_state_nodes()
@@ -870,7 +915,10 @@ defmodule SymphonyElixir.Setup do
       |> Enum.filter(&is_binary/1)
       |> Enum.uniq()
 
-    missing_states = Enum.reject(@required_workflow_states, &(&1 in available_states))
+    missing_states =
+      auto_review_enabled
+      |> required_workflow_states()
+      |> Enum.reject(&(&1 in available_states))
 
     if missing_states == [] do
       :ok
@@ -879,6 +927,26 @@ defmodule SymphonyElixir.Setup do
        "Selected Linear project #{inspect(slug)} is missing required workflow states: " <>
          Enum.join(missing_states, ", ") <>
          ". Add them in Linear Team Settings -> Workflow and rerun `symphony-pi setup`."}
+    end
+  end
+
+  defp required_workflow_states(true),
+    do: insert_before(@base_required_workflow_states, AutoReview.human_review_state(), AutoReview.agent_review_state())
+
+  defp required_workflow_states(false), do: @base_required_workflow_states
+
+  defp required_workflow_states_label(auto_review_enabled) do
+    auto_review_enabled
+    |> required_workflow_states()
+    |> Enum.join(", ")
+  end
+
+  defp insert_before(items, target, value) when is_list(items) do
+    {leading, trailing} = Enum.split_while(items, &(&1 != target))
+
+    case trailing do
+      [] -> items ++ [value]
+      _ -> leading ++ [value] ++ trailing
     end
   end
 

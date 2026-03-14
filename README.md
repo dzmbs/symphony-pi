@@ -31,6 +31,17 @@ For normal use, you need these tools on your machine:
 - `git`
 - `pi`
 
+Pi version guidance:
+
+- tested with `pi >= 0.56.2`
+- recommended: `pi >= 0.58.0`
+
+Why `0.58.0+` is recommended:
+
+- newer model metadata and runtime behavior
+- 1M context window reporting for Claude Opus/Sonnet 4.6
+- newer extension/tool execution fixes and transport fixes
+
 ## Quick Start
 
 For a new repository, the recommended path is:
@@ -61,7 +72,7 @@ The setup command does the first-pass onboarding for you:
   - OAuth providers are re-checked after you complete `pi` -> `/login <provider>`
 - tries to fetch Linear projects and lets you pick one interactively when that succeeds
 - falls back to manual project slug entry with the fetch error shown when it does not
-- validates required Linear states when the project can be resolved
+- validates required Linear states for the workflow mode you selected when the project can be resolved
 - installs the Symphony Pi project-local Pi package into the target repo
 - writes a working `WORKFLOW.md`
 - optionally creates a minimal `AGENTS.md`
@@ -89,9 +100,9 @@ symphony-pi setup /path/to/your-repo
 ```
 
 4. Customize the generated `WORKFLOW.md` only if your project needs something beyond the detected defaults.
-   - When creating a workflow based on this repo, note that it depends on non-standard Linear
-     issue statuses: "Rework", "Human Review", and "Merging". You can customize them in
-     Team Settings → Workflow in Linear.
+   - Standard flow requires these non-default Linear states: `Rework`, `Human Review`, and `Merging`.
+   - Auto-review flow additionally requires `Agent Review`.
+   - You can add them in Team Settings -> Workflow in Linear.
 5. Follow the instructions below to install the required runtime dependencies and start the service.
 
 ## Install From Source
@@ -204,8 +215,8 @@ Notes:
   Symphony loads its bundled `linear_graphql` extension automatically.
 - `auto_review` is optional and disabled by default.
 - When enabled, Symphony Pi runs a fresh review pass after the issue is
-  moved to `Human Review`. If the reviewer asks for changes, Symphony Pi moves the issue back to
-  `Rework`, performs a focused rework pass, and can review again before final handoff.
+  moved to `Agent Review`. If the reviewer asks for changes, Symphony Pi moves the issue back to
+  `Rework`, performs a focused rework pass, and can review again before final human handoff.
 - `auto_review.model` and `auto_review.thinking` override the base `pi` runtime for the review
   stage only. Configured implementation and review models are validated against the local `pi`
   installation at CLI startup.
@@ -307,11 +318,19 @@ auto_review:
 Behavior:
 
 - implementation still runs with the base `pi` config
-- once work reaches `Human Review`, Symphony Pi runs a fresh internal review pass
-- if review passes, the ticket stays in `Human Review`
+- when implementation is ready, the agent moves the issue to `Agent Review`
+- Symphony Pi runs a fresh internal review pass from `Agent Review`
+- if review passes, Symphony Pi moves the ticket to `Human Review`
 - if review requests changes, Symphony Pi moves the ticket to `Rework`, performs a focused rework pass, and can review again
-- the review verdict currently drives Symphony Pi's internal `Rework`/`Human Review` loop; it does
+- if review fails unexpectedly, the ticket stays in `Agent Review` for manual investigation
+- the review verdict currently drives Symphony Pi's internal `Rework`/`Agent Review`/`Human Review` loop; it does
   not yet post formal GitHub PR review comments on your behalf
+
+Prompt behavior:
+
+- without `auto_review`, the generated workflow uses the normal implementation instructions and the agent hands off directly to `Human Review`
+- with `auto_review`, Symphony Pi appends extra runtime guidance telling the implementation agent to hand off to `Agent Review` instead
+- the review pass uses the configured `auto_review.model` / `auto_review.thinking` overrides and a restricted review tool profile
 
 If you want to experiment without editing `WORKFLOW.md`, use process-level overrides:
 
@@ -323,6 +342,37 @@ symphony-pi /path/to/WORKFLOW.md \
 ```
 
 Those flags only affect the current Symphony Pi process.
+
+## Linear State Order
+
+Choose one workflow and make Linear match it before you run Symphony Pi.
+
+Standard flow, no auto-review:
+
+1. `Todo`
+2. `In Progress`
+3. `Rework`
+4. `Human Review`
+5. `Merging`
+6. `Done`
+
+Auto-review flow:
+
+1. `Todo`
+2. `In Progress`
+3. `Rework`
+4. `Agent Review`
+5. `Human Review`
+6. `Merging`
+7. `Done`
+
+Notes:
+
+- `Closed`, `Cancelled`, `Canceled`, and `Duplicate` are still treated as terminal cleanup states even if they are not part of the main happy-path order.
+- Any run with auto-review enabled, whether from `WORKFLOW.md` or a CLI override like `--auto-review`, requires `Agent Review` to exist in the Linear team workflow.
+- `symphony-pi setup` validates the state set that matches your setup choice:
+  - auto-review disabled: no `Agent Review` required
+  - auto-review enabled: `Agent Review` required
 
 ## Runtime Safety
 

@@ -117,16 +117,22 @@ auto_review:
 Notes:
 
 - configured implementation and review models are fetched from and validated against the local `pi` installation at startup
-- the review pass is internal to Symphony Pi; it drives `Rework` vs `Human Review`, but does not yet post GitHub PR review comments automatically
+- the review pass is internal to Symphony Pi; it drives `Rework` vs `Agent Review` vs `Human Review`, but does not yet post GitHub PR review comments automatically
 - the review stage uses a fresh Pi session and a restricted review tool profile by default
+- with auto-review enabled, implementation should hand off to `Agent Review`; Symphony Pi moves the ticket to `Human Review` only after the internal review passes
+- without auto-review, implementation hands off directly to `Human Review`
 
 ## Linear workflow states
 
-Make sure the Linear team for the target project includes:
+Standard flow:
 
 - `Rework`
 - `Human Review`
 - `Merging`
+
+Auto-review flow adds:
+
+- `Agent Review`
 
 ## Launch
 

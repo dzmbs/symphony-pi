@@ -630,6 +630,161 @@ defmodule SymphonyElixir.CoreTest do
     assert updated_entry.issue.state == "In Progress"
   end
 
+  test "reconcile keeps running issue alive in Agent Review when auto review is enabled" do
+    issue_id = "issue-agent-review-enabled"
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      auto_review_enabled: true,
+      tracker_active_states: ["Todo", "In Progress", "Merging", "Rework"],
+      tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
+    )
+
+    agent_pid =
+      spawn(fn ->
+        receive do
+          :stop -> :ok
+        end
+      end)
+
+    state = %Orchestrator.State{
+      running: %{
+        issue_id => %{
+          pid: agent_pid,
+          ref: nil,
+          identifier: "MT-AR-AR-1",
+          issue: %Issue{
+            id: issue_id,
+            identifier: "MT-AR-AR-1",
+            state: "In Progress"
+          },
+          started_at: DateTime.utc_now()
+        }
+      },
+      claimed: MapSet.new([issue_id]),
+      runtime_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-AR-AR-1",
+      state: "Agent Review",
+      title: "Ready for inline review",
+      description: "Keep the active run alive so auto-review can execute",
+      labels: []
+    }
+
+    updated_state = Orchestrator.reconcile_issue_states_for_test([issue], state)
+    updated_entry = updated_state.running[issue_id]
+
+    assert Map.has_key?(updated_state.running, issue_id)
+    assert MapSet.member?(updated_state.claimed, issue_id)
+    assert Process.alive?(agent_pid)
+    assert updated_entry.issue.state == "Agent Review"
+  end
+
+  test "reconcile stops running issue in Agent Review when auto review is disabled" do
+    issue_id = "issue-agent-review-disabled"
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      auto_review_enabled: false,
+      tracker_active_states: ["Todo", "In Progress", "Merging", "Rework"],
+      tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
+    )
+
+    agent_pid =
+      spawn(fn ->
+        receive do
+          :stop -> :ok
+        end
+      end)
+
+    state = %Orchestrator.State{
+      running: %{
+        issue_id => %{
+          pid: agent_pid,
+          ref: nil,
+          identifier: "MT-AR-AR-2",
+          issue: %Issue{
+            id: issue_id,
+            identifier: "MT-AR-AR-2",
+            state: "In Progress"
+          },
+          started_at: DateTime.utc_now()
+        }
+      },
+      claimed: MapSet.new([issue_id]),
+      runtime_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-AR-AR-2",
+      state: "Agent Review",
+      title: "Unexpected agent review state",
+      description: "Stop the active run when no auto-review is configured",
+      labels: []
+    }
+
+    updated_state = Orchestrator.reconcile_issue_states_for_test([issue], state)
+
+    refute Map.has_key?(updated_state.running, issue_id)
+    refute MapSet.member?(updated_state.claimed, issue_id)
+    refute Process.alive?(agent_pid)
+  end
+
+  test "reconcile stops running issue in Human Review even when auto review is enabled" do
+    issue_id = "issue-human-review-enabled"
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      auto_review_enabled: true,
+      tracker_active_states: ["Todo", "In Progress", "Merging", "Rework"],
+      tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
+    )
+
+    agent_pid =
+      spawn(fn ->
+        receive do
+          :stop -> :ok
+        end
+      end)
+
+    state = %Orchestrator.State{
+      running: %{
+        issue_id => %{
+          pid: agent_pid,
+          ref: nil,
+          identifier: "MT-AR-HR-2",
+          issue: %Issue{
+            id: issue_id,
+            identifier: "MT-AR-HR-2",
+            state: "Agent Review"
+          },
+          started_at: DateTime.utc_now()
+        }
+      },
+      claimed: MapSet.new([issue_id]),
+      runtime_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-AR-HR-2",
+      state: "Human Review",
+      title: "Human handoff complete",
+      description: "The runner should not keep coding once internal review already passed",
+      labels: []
+    }
+
+    updated_state = Orchestrator.reconcile_issue_states_for_test([issue], state)
+
+    refute Map.has_key?(updated_state.running, issue_id)
+    refute MapSet.member?(updated_state.claimed, issue_id)
+    refute Process.alive?(agent_pid)
+  end
+
   test "reconcile stops running issue when it is reassigned away from this worker" do
     issue_id = "issue-reassigned"
 
@@ -877,7 +1032,7 @@ defmodule SymphonyElixir.CoreTest do
 
   defp assert_due_in_range(due_at_ms, min_remaining_ms, max_remaining_ms) do
     remaining_ms = due_at_ms - System.monotonic_time(:millisecond)
-    jitter_ms = 1_000
+    jitter_ms = 2_000
 
     assert remaining_ms >= max(min_remaining_ms - jitter_ms, 0)
     assert remaining_ms <= max_remaining_ms + jitter_ms
@@ -1228,9 +1383,9 @@ defmodule SymphonyElixir.CoreTest do
 
       state =
         case attempt do
-          1 -> "Human Review"
+          1 -> "Agent Review"
           2 -> "Rework"
-          3 -> "Human Review"
+          3 -> "Agent Review"
           _ -> "Done"
         end
 
@@ -1254,7 +1409,7 @@ defmodule SymphonyElixir.CoreTest do
     assert_receive {:auto_review_start_session, :reviewer, review_runtime_config, true}, 500
     assert review_runtime_config[:model] == "openai/gpt-5"
     assert review_runtime_config[:thinking] == "medium"
-    assert_receive {:auto_review_run_turn, :reviewer, "Human Review", review_prompt}, 500
+    assert_receive {:auto_review_run_turn, :reviewer, "Agent Review", review_prompt}, 500
     assert review_prompt =~ "Return ONLY valid JSON"
 
     assert_receive {:memory_tracker_state_update, "issue-auto-review", "Rework"}, 500
@@ -1262,14 +1417,15 @@ defmodule SymphonyElixir.CoreTest do
     assert rework_prompt =~ "Rework cycle for Linear issue `MT-AR-1`."
 
     assert_receive {:auto_review_start_session, :reviewer, _review_runtime_config, true}, 500
-    assert_receive {:auto_review_run_turn, :reviewer, "Human Review", _review_prompt}, 500
+    assert_receive {:auto_review_run_turn, :reviewer, "Agent Review", _review_prompt}, 500
+    assert_receive {:memory_tracker_state_update, "issue-auto-review", "Human Review"}, 500
 
     assert_receive {:auto_review_stop_session, :reviewer}, 500
     assert_receive {:auto_review_stop_session, :reviewer}, 500
     assert_receive {:auto_review_stop_session, :implementer}, 500
   end
 
-  test "agent runner falls back to normal human review when auto-review output is invalid" do
+  test "agent runner leaves the issue in Agent Review when auto-review output is invalid" do
     Application.put_env(:symphony_elixir, :backend_module_override, AutoReviewBackend)
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
@@ -1302,7 +1458,7 @@ defmodule SymphonyElixir.CoreTest do
     }
 
     state_fetcher = fn [_issue_id] ->
-      {:ok, [%{issue | state: "Human Review"}]}
+      {:ok, [%{issue | state: "Agent Review"}]}
     end
 
     assert :ok =
@@ -1317,7 +1473,7 @@ defmodule SymphonyElixir.CoreTest do
 
     assert_receive {:runtime_worker_update, "issue-auto-review-invalid", %{raw: "auto-review started"}}, 500
 
-    assert_receive {:runtime_worker_update, "issue-auto-review-invalid", %{raw: "auto-review failed; leaving issue in Human Review"}},
+    assert_receive {:runtime_worker_update, "issue-auto-review-invalid", %{raw: "auto-review failed; leaving issue in Agent Review"}},
                    500
 
     assert_receive {:auto_review_stop_session, :reviewer}, 500

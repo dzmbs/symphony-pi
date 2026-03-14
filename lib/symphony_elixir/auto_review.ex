@@ -5,6 +5,7 @@ defmodule SymphonyElixir.AutoReview do
 
   alias SymphonyElixir.{Config, Linear.Issue}
 
+  @agent_review_state "Agent Review"
   @human_review_state "Human Review"
 
   @type finding :: %{
@@ -31,6 +32,9 @@ defmodule SymphonyElixir.AutoReview do
 
   @spec human_review_state() :: String.t()
   def human_review_state, do: @human_review_state
+
+  @spec agent_review_state() :: String.t()
+  def agent_review_state, do: @agent_review_state
 
   @spec max_rework_passes(Config.Schema.t() | nil) :: non_neg_integer()
   def max_rework_passes(settings \\ nil)
@@ -97,7 +101,7 @@ defmodule SymphonyElixir.AutoReview do
     """
     Rework cycle for Linear issue `#{issue.identifier}`.
 
-    Automated review requested changes after the implementation was moved to `#{@human_review_state}`.
+    Automated review requested changes after the implementation was moved to `#{@agent_review_state}`.
 
     This is rework pass #{rework_pass} of #{max_rework_passes}.
 
@@ -108,7 +112,7 @@ defmodule SymphonyElixir.AutoReview do
     - Fix the blocking findings only; do not expand scope.
     - Re-run the validation needed to prove the findings are resolved.
     - Update the existing Agent Workpad comment with what changed and what was validated.
-    - When the findings are resolved, move the issue back to `#{@human_review_state}`.
+    - When the findings are resolved, move the issue back to `#{@agent_review_state}`.
     - If you discover a genuine blocker, record it clearly in the workpad before stopping.
     """
   end
