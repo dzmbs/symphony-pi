@@ -12,7 +12,6 @@ defmodule SymphonyElixir.Setup do
   @default_pi_package "@mariozechner/pi-coding-agent"
   @default_pi_thinking "high"
   @default_review_thinking "medium"
-  @default_max_rework_passes 1
   @minimum_tested_pi_version "0.56.2"
   @recommended_pi_version "0.58.0"
   @default_active_states ["Todo", "In Progress", "Merging", "Rework"]
@@ -419,7 +418,6 @@ defmodule SymphonyElixir.Setup do
       "#   enabled: true",
       "#   model: openai/gpt-5.4",
       "#   thinking: medium",
-      "#   max_rework_passes: 1",
       "#   fresh_session: true"
     ]
   end
@@ -430,7 +428,6 @@ defmodule SymphonyElixir.Setup do
       "  enabled: true",
       "  model: #{yaml_value(review_model)}",
       "  thinking: #{@default_review_thinking}",
-      "  max_rework_passes: #{@default_max_rework_passes}",
       "  fresh_session: true"
     ]
   end

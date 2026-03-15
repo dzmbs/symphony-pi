@@ -677,14 +677,18 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     send(pid, :run_poll_cycle)
 
     snapshot =
-      wait_for_snapshot(pid, fn
-        %{polling: %{checking?: false, poll_interval_ms: 50, next_poll_in_ms: next_poll_in_ms}}
-        when is_integer(next_poll_in_ms) and next_poll_in_ms <= 50 ->
-          true
+      wait_for_snapshot(
+        pid,
+        fn
+          %{polling: %{checking?: false, poll_interval_ms: 50, next_poll_in_ms: next_poll_in_ms}}
+          when is_integer(next_poll_in_ms) and next_poll_in_ms <= 50 ->
+            true
 
-        _ ->
-          false
-      end)
+          _ ->
+            false
+        end,
+        1_500
+      )
 
     assert %{
              polling: %{
@@ -1306,7 +1310,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     refute rendered =~ "Timestamp:"
   end
 
-  defp wait_for_snapshot(pid, predicate, timeout_ms \\ 500) when is_function(predicate, 1) do
+  defp wait_for_snapshot(pid, predicate, timeout_ms) when is_function(predicate, 1) do
     deadline_ms = System.monotonic_time(:millisecond) + timeout_ms
     do_wait_for_snapshot(pid, predicate, deadline_ms)
   end

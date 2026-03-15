@@ -39,7 +39,6 @@ pi:
 #   enabled: true
 #   model: openai/gpt-5
 #   thinking: medium
-#   max_rework_passes: 1
 #   fresh_session: true
 #   # Requires an `Agent Review` state in the Linear team workflow.
 ---
@@ -255,11 +254,11 @@ Use this only when completion is blocked by missing required tools or missing au
 
 ## Step 3: Optional Agent Review, Human Review, and merge handling
 
-1. When `auto_review` is enabled and the issue is in `Agent Review`, do not do more implementation work unless Symphony Pi itself moves the ticket back to `Rework`.
+1. When `auto_review` is enabled and the issue is in `Agent Review`, do not do more implementation work.
 2. Symphony Pi runs the internal auto-review pass from `Agent Review`.
-3. If auto-review passes, Symphony Pi moves the issue to `Human Review`.
-4. If auto-review requests changes, Symphony Pi moves the issue to `Rework` and follows the rework flow.
-5. If auto-review fails unexpectedly, leave the issue in `Agent Review` for human investigation.
+3. Symphony Pi posts the internal review verdict in Linear and then moves the issue to `Human Review`.
+4. This handoff happens whether the review passes, requests changes, or fails unexpectedly to produce a valid verdict.
+5. Humans read the internal review verdict during `Human Review` and decide whether to approve or move the issue to `Rework`.
 6. When the issue is in `Human Review`, do not code or change ticket content.
 7. Poll for updates as needed, including GitHub PR review comments from humans and bots.
 8. If review feedback requires changes, move the issue to `Rework` and follow the rework flow.

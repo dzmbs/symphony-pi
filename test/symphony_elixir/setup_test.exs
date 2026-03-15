@@ -44,6 +44,7 @@ defmodule SymphonyElixir.SetupTest do
       end,
       io_gets:
         prompt_answers(%{
+          "Replace existing WORKFLOW.md and create WORKFLOW.md.bak?" => "",
           "Use the only Linear project found:" => "",
           "Workspace root" => "~/code/workspaces",
           "Implementation model" => "",
@@ -163,8 +164,6 @@ defmodule SymphonyElixir.SetupTest do
 
     File.write!(Path.join(source_root, "package.json"), ~s({"name": "symphony-pi"}))
 
-    Process.put(:setup_inputs, ["project-c", "", "", "n", "n"])
-
     deps = %{
       current_dir: fn -> source_root end,
       expand_path: &Path.expand/1,
@@ -184,7 +183,14 @@ defmodule SymphonyElixir.SetupTest do
         "pi" -> "/usr/bin/pi"
         _ -> nil
       end,
-      io_gets: &next_input/1,
+      io_gets:
+        prompt_answers(%{
+          "Linear project slug" => "project-c",
+          "Workspace root" => "",
+          "Implementation model" => "",
+          "Enable optional internal auto-review before human handoff?" => "n",
+          "Create a minimal AGENTS.md starter for repo-specific coding guidance?" => "n"
+        }),
       io_puts: fn line -> send(parent, {:setup_output, line}) end,
       pi_auth_path: fn -> Path.join(repo_root, "missing-auth.json") end,
       available_models: fn "pi" ->
@@ -246,6 +252,7 @@ defmodule SymphonyElixir.SetupTest do
         prompt_answers(%{
           "Paste LINEAR_API_KEY:" => "linear-token-123",
           "Save LINEAR_API_KEY to" => "y",
+          "Replace existing WORKFLOW.md and create WORKFLOW.md.bak?" => "",
           "Use the only Linear project found:" => "",
           "Workspace root" => "",
           "Implementation model" => "",
@@ -436,6 +443,7 @@ defmodule SymphonyElixir.SetupTest do
       io_gets:
         prompt_answers(%{
           "Install Pi now with" => "",
+          "Replace existing WORKFLOW.md and create WORKFLOW.md.bak?" => "",
           "Use the only Linear project found:" => "",
           "Workspace root" => "",
           "Implementation model" => "",
@@ -511,6 +519,7 @@ defmodule SymphonyElixir.SetupTest do
 
   defp temp_dir(label) do
     path = Path.join(System.tmp_dir!(), "symphony-setup-test-#{label}-#{System.unique_integer([:positive])}")
+    File.rm_rf!(path)
     File.mkdir_p!(path)
     path
   end

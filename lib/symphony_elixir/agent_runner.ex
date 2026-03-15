@@ -126,22 +126,15 @@ defmodule SymphonyElixir.AgentRunner do
             case maybe_run_auto_review(
                    backend,
                    final_session,
-                   latest_session_key,
                    workspace,
                    final_issue,
                    update_recipient,
                    opts,
-                   issue_state_fetcher,
-                   max_turns,
-                   0
+                   issue_state_fetcher
                  ) do
               {:ok, reviewed_session} ->
                 Process.put(latest_session_key, reviewed_session)
                 :ok
-
-              {:error, reason, reviewed_session} ->
-                Process.put(latest_session_key, reviewed_session)
-                {:error, reason}
             end
 
           {:error, reason, _final_session} ->
@@ -207,14 +200,11 @@ defmodule SymphonyElixir.AgentRunner do
   defp maybe_run_auto_review(
          backend,
          session,
-         latest_session_key,
          workspace,
          issue,
          update_recipient,
          opts,
-         issue_state_fetcher,
-         max_turns,
-         rework_pass
+         issue_state_fetcher
        ) do
     settings = Config.settings!()
 
@@ -230,17 +220,10 @@ defmodule SymphonyElixir.AgentRunner do
 
         run_review_pass(backend, workspace, issue, update_recipient, opts, settings)
         |> handle_auto_review_result(
-          backend,
           session,
-          latest_session_key,
-          workspace,
           issue,
           update_recipient,
-          opts,
-          issue_state_fetcher,
-          max_turns,
-          rework_pass,
-          settings
+          issue_state_fetcher
         )
     end
   end
@@ -324,124 +307,95 @@ defmodule SymphonyElixir.AgentRunner do
     """
   end
 
-  defp build_rework_turn_prompt(issue, verdict, rework_pass, max_rework_passes, 1, _max_turns),
-    do: AutoReview.build_rework_prompt(issue, verdict, rework_pass, max_rework_passes)
-
-  defp build_rework_turn_prompt(_issue, _verdict, rework_pass, max_rework_passes, turn_number, max_turns) do
-    """
-    Rework continuation guidance:
-
-    - This is rework pass #{rework_pass} of #{max_rework_passes}.
-    - This is continuation turn ##{turn_number} of #{max_turns} for the current rework cycle.
-    - Continue addressing the automated review findings already provided in this session.
-    - Keep the issue in `Rework` until the review findings are fully resolved and validated.
-    - Move the issue back to `#{AutoReview.agent_review_state()}` only when the requested changes are complete.
-    """
-  end
-
   defp handle_auto_review_result(
          {:ok, %{status: :pass} = verdict},
-         _backend,
          session,
-         _latest_session_key,
-         _workspace,
          issue,
          update_recipient,
-         _opts,
-         issue_state_fetcher,
-         _max_turns,
-         _rework_pass,
-         _settings
+         issue_state_fetcher
        ) do
     Logger.info("Auto-review passed for #{issue_context(issue)} summary=#{inspect(verdict.summary)}")
-
-    handle_review_pass(issue, issue_state_fetcher, update_recipient, session)
+    handle_review_handoff(issue, verdict, update_recipient, issue_state_fetcher, session)
   end
 
   defp handle_auto_review_result(
          {:ok, %{status: :changes_requested} = verdict},
-         backend,
          session,
-         latest_session_key,
-         workspace,
          issue,
          update_recipient,
-         opts,
-         issue_state_fetcher,
-         max_turns,
-         rework_pass,
-         settings
+         issue_state_fetcher
        ) do
     Logger.info(
       "Auto-review requested changes for #{issue_context(issue)} " <>
         "findings=#{length(verdict.findings)}"
     )
 
-    send_agent_update(update_recipient, issue, auto_review_update("auto-review requested changes"))
-
-    maybe_run_rework(
-      backend,
-      session,
-      latest_session_key,
-      workspace,
-      issue,
-      verdict,
-      update_recipient,
-      opts,
-      issue_state_fetcher,
-      max_turns,
-      rework_pass,
-      settings
-    )
+    handle_review_handoff(issue, verdict, update_recipient, issue_state_fetcher, session)
   end
 
   defp handle_auto_review_result(
          {:error, reason},
-         _backend,
          session,
-         _latest_session_key,
-         _workspace,
          issue,
          update_recipient,
-         _opts,
-         _issue_state_fetcher,
-         _max_turns,
-         _rework_pass,
-         _settings
+         issue_state_fetcher
        ) do
     Logger.warning(
-      "Auto-review failed for #{issue_context(issue)} reason=#{inspect(reason)}; leaving issue in " <>
-        "#{AutoReview.agent_review_state()} for manual follow-up"
+      "Auto-review failed for #{issue_context(issue)} reason=#{inspect(reason)}; moving issue to " <>
+        "#{AutoReview.human_review_state()} for manual follow-up"
     )
 
-    send_agent_update(
-      update_recipient,
-      issue,
-      auto_review_update("auto-review failed; leaving issue in Agent Review")
-    )
-
-    {:ok, session}
+    handle_failed_review_handoff(issue, reason, update_recipient, issue_state_fetcher, session)
   end
 
-  defp handle_review_pass(issue, issue_state_fetcher, update_recipient, session) do
+  defp handle_review_handoff(issue, verdict, update_recipient, issue_state_fetcher, session) do
+    comment_result = persist_review_handoff(issue, verdict)
+
     case transition_to_human_review(issue, issue_state_fetcher) do
       {:ok, _refreshed_issue} ->
         send_agent_update(
           update_recipient,
           issue,
-          auto_review_update("auto-review passed; moved issue to Human Review")
+          auto_review_update(review_handoff_message(verdict, comment_result))
         )
 
       {:error, reason} ->
         Logger.warning(
-          "Auto-review passed for #{issue_context(issue)} but could not move issue to " <>
+          "Auto-review completed for #{issue_context(issue)} but could not move issue to " <>
             "#{AutoReview.human_review_state()}: #{inspect(reason)}"
         )
 
         send_agent_update(
           update_recipient,
           issue,
-          auto_review_update("auto-review passed but failed to move issue to Human Review")
+          auto_review_update("auto-review completed but failed to move issue to Human Review")
+        )
+    end
+
+    {:ok, session}
+  end
+
+  defp handle_failed_review_handoff(issue, reason, update_recipient, issue_state_fetcher, session) do
+    comment_result = persist_failed_review_handoff(issue, reason)
+
+    case transition_to_human_review(issue, issue_state_fetcher) do
+      {:ok, _refreshed_issue} ->
+        send_agent_update(
+          update_recipient,
+          issue,
+          auto_review_update(failed_review_handoff_message(comment_result))
+        )
+
+      {:error, transition_reason} ->
+        Logger.warning(
+          "Auto-review failed for #{issue_context(issue)} and could not move issue to " <>
+            "#{AutoReview.human_review_state()}: #{inspect(transition_reason)}"
+        )
+
+        send_agent_update(
+          update_recipient,
+          issue,
+          auto_review_update("auto-review failed and could not move issue to Human Review")
         )
     end
 
@@ -449,109 +403,42 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp transition_to_human_review(%Issue{id: issue_id} = issue, issue_state_fetcher) when is_binary(issue_id) do
-    Tracker.update_issue_state(issue_id, AutoReview.human_review_state())
-    refresh_issue_with_state(issue, issue_state_fetcher, AutoReview.human_review_state())
+    with :ok <- Tracker.update_issue_state(issue_id, AutoReview.human_review_state()) do
+      refresh_issue_with_state(issue, issue_state_fetcher, AutoReview.human_review_state())
+    end
   end
 
   defp transition_to_human_review(_issue, _issue_state_fetcher), do: {:error, :missing_issue_id}
 
-  defp maybe_run_rework(
-         backend,
-         session,
-         latest_session_key,
-         workspace,
-         issue,
-         verdict,
-         update_recipient,
-         opts,
-         issue_state_fetcher,
-         max_turns,
-         rework_pass,
-         settings
-       ) do
-    max_rework_passes = AutoReview.max_rework_passes(settings)
-
-    if rework_pass >= max_rework_passes do
-      Logger.warning("Auto-review exhausted rework passes for #{issue_context(issue)}")
-      _ = Tracker.update_issue_state(issue.id, "Rework")
-      send_agent_update(update_recipient, issue, auto_review_update("auto-review exhausted; leaving issue in Rework"))
-      {:ok, session}
-    else
-      next_rework_pass = rework_pass + 1
-
-      with :ok <- Tracker.update_issue_state(issue.id, "Rework"),
-           {:ok, refreshed_issue} <- refresh_issue_with_state(issue, issue_state_fetcher, "Rework") do
-        run_rework_cycle(
-          backend,
-          session,
-          latest_session_key,
-          workspace,
-          refreshed_issue,
-          verdict,
-          update_recipient,
-          opts,
-          issue_state_fetcher,
-          max_turns,
-          next_rework_pass,
-          max_rework_passes
-        )
-      else
-        {:error, reason} ->
-          {:error, {:auto_review_rework_failed, reason}, session}
-      end
-    end
+  defp persist_review_handoff(%Issue{id: issue_id} = issue, verdict) when is_binary(issue_id) do
+    Tracker.create_comment(issue_id, AutoReview.build_handoff_comment(issue, verdict))
   end
 
-  defp run_rework_cycle(
-         backend,
-         session,
-         latest_session_key,
-         workspace,
-         refreshed_issue,
-         verdict,
-         update_recipient,
-         opts,
-         issue_state_fetcher,
-         max_turns,
-         rework_pass,
-         max_rework_passes
-       ) do
-    rework_prompt_builder =
-      &build_rework_turn_prompt(&1, verdict, rework_pass, max_rework_passes, &2, &3)
+  defp persist_review_handoff(_issue, _verdict), do: {:error, :missing_issue_id}
 
-    case do_run_agent_turns(
-           backend,
-           session,
-           latest_session_key,
-           workspace,
-           refreshed_issue,
-           update_recipient,
-           opts,
-           issue_state_fetcher,
-           rework_prompt_builder,
-           1,
-           max_turns
-         ) do
-      {:ok, updated_session, final_issue} ->
-        Process.put(latest_session_key, updated_session)
-
-        maybe_run_auto_review(
-          backend,
-          updated_session,
-          latest_session_key,
-          workspace,
-          final_issue,
-          update_recipient,
-          opts,
-          issue_state_fetcher,
-          max_turns,
-          rework_pass
-        )
-
-      {:error, reason, updated_session} ->
-        {:error, reason, updated_session}
-    end
+  defp persist_failed_review_handoff(%Issue{id: issue_id} = issue, reason) when is_binary(issue_id) do
+    Tracker.create_comment(issue_id, AutoReview.build_failed_handoff_comment(issue, reason))
   end
+
+  defp persist_failed_review_handoff(_issue, _reason), do: {:error, :missing_issue_id}
+
+  defp review_handoff_message(%{status: :pass}, :ok),
+    do: "auto-review passed; posted verdict and moved issue to Human Review"
+
+  defp review_handoff_message(%{status: :pass}, {:error, _reason}),
+    do: "auto-review passed; failed to post verdict comment but moved issue to Human Review"
+
+  defp review_handoff_message(%{status: :changes_requested}, :ok),
+    do: "auto-review requested changes; posted findings and moved issue to Human Review"
+
+  defp review_handoff_message(%{status: :changes_requested}, {:error, _reason}),
+    do: "auto-review requested changes; failed to post findings comment but moved issue to Human Review"
+
+  defp failed_review_handoff_message(:ok),
+    do: "auto-review failed; posted failure note and moved issue to Human Review"
+
+  defp failed_review_handoff_message({:error, _reason}),
+    do: "auto-review failed; could not post failure note but moved issue to Human Review"
 
   defp continue_with_issue?(%Issue{id: issue_id} = issue, issue_state_fetcher) when is_binary(issue_id) do
     case issue_state_fetcher.([issue_id]) do

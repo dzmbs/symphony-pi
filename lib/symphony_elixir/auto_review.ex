@@ -90,31 +90,52 @@ defmodule SymphonyElixir.AutoReview do
     """
   end
 
-  @spec build_rework_prompt(Issue.t(), verdict(), pos_integer(), pos_integer()) :: String.t()
-  def build_rework_prompt(%Issue{} = issue, verdict, rework_pass, max_rework_passes) do
-    findings_json =
-      verdict
-      |> Map.take([:status, :summary, :findings])
-      |> Jason.encode_to_iodata!(pretty: true)
-      |> IO.iodata_to_binary()
+  @spec build_handoff_comment(Issue.t(), verdict()) :: String.t()
+  def build_handoff_comment(%Issue{} = issue, %{status: status, summary: summary, findings: findings}) do
+    header =
+      case status do
+        :pass -> "PASS"
+        :changes_requested -> "CHANGES REQUESTED"
+      end
+
+    findings_section =
+      case findings do
+        [] ->
+          "- No blocking findings.\n"
+
+        _ ->
+          findings
+          |> Enum.with_index(1)
+          |> Enum.map_join("", &format_finding/1)
+      end
 
     """
-    Rework cycle for Linear issue `#{issue.identifier}`.
+    ## Agent Review
 
-    Automated review requested changes after the implementation was moved to `#{@agent_review_state}`.
+    Issue: `#{issue.identifier}`
+    Verdict: #{header}
+    Summary: #{summary}
 
-    This is rework pass #{rework_pass} of #{max_rework_passes}.
-
-    Review findings:
-    #{findings_json}
-
-    Instructions:
-    - Fix the blocking findings only; do not expand scope.
-    - Re-run the validation needed to prove the findings are resolved.
-    - Update the existing Agent Workpad comment with what changed and what was validated.
-    - When the findings are resolved, move the issue back to `#{@agent_review_state}`.
-    - If you discover a genuine blocker, record it clearly in the workpad before stopping.
+    Findings:
+    #{findings_section}
     """
+    |> String.trim_trailing()
+  end
+
+  @spec build_failed_handoff_comment(Issue.t(), term()) :: String.t()
+  def build_failed_handoff_comment(%Issue{} = issue, reason) do
+    """
+    ## Agent Review
+
+    Issue: `#{issue.identifier}`
+    Verdict: REVIEW FAILED
+    Summary: Symphony Pi could not complete the internal review pass automatically.
+
+    Details:
+    - Error: #{inspect(reason)}
+    - Human review should inspect the current PR/workspace state directly.
+    """
+    |> String.trim_trailing()
   end
 
   @spec parse_verdict(String.t()) :: {:ok, verdict()} | {:error, term()}
@@ -206,6 +227,14 @@ defmodule SymphonyElixir.AutoReview do
   defp validate_findings_for_status(:changes_requested, findings) when findings != [], do: :ok
   defp validate_findings_for_status(:pass, _findings), do: {:error, :pass_with_findings}
   defp validate_findings_for_status(:changes_requested, _findings), do: {:error, :changes_requested_without_findings}
+
+  defp format_finding({finding, index}) do
+    severity = finding.severity || "unspecified"
+    title = finding.title || "Finding #{index}"
+    path = if is_binary(finding.path), do: " (`#{finding.path}`)", else: ""
+
+    "- [#{severity}] #{title}#{path}: #{finding.summary}\n"
+  end
 
   defp stringify_optional(value) when is_binary(value), do: value
   defp stringify_optional(_value), do: nil

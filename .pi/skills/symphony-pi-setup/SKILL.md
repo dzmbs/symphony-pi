@@ -110,16 +110,15 @@ auto_review:
   enabled: true
   model: openai/gpt-5.4
   thinking: medium
-  max_rework_passes: 1
   fresh_session: true
 ```
 
 Notes:
 
 - configured implementation and review models are fetched from and validated against the local `pi` installation at startup
-- the review pass is internal to Symphony Pi; it drives `Rework` vs `Agent Review` vs `Human Review`, but does not yet post GitHub PR review comments automatically
+- the review pass is internal to Symphony Pi; it posts its verdict to Linear and hands off to `Human Review`, but does not yet post GitHub PR review comments automatically
 - the review stage uses a fresh Pi session and a restricted review tool profile by default
-- with auto-review enabled, implementation should hand off to `Agent Review`; Symphony Pi moves the ticket to `Human Review` only after the internal review passes
+- with auto-review enabled, implementation should hand off to `Agent Review`; Symphony Pi runs one internal review pass there, posts the verdict, and then moves the ticket to `Human Review`
 - without auto-review, implementation hands off directly to `Human Review`
 
 ## Linear workflow states
@@ -133,6 +132,11 @@ Standard flow:
 Auto-review flow adds:
 
 - `Agent Review`
+
+With auto-review enabled, the intended state progression is:
+
+- `Todo -> In Progress -> Agent Review -> Human Review`
+- if a human requests changes: `Human Review -> Rework -> Agent Review -> Human Review`
 
 ## Launch
 

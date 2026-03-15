@@ -69,8 +69,8 @@ defmodule SymphonyElixir.PromptBuilder do
         "\n\nAuto-review is enabled for this run.\n" <>
         "- When implementation is complete and validated, prepare the branch/PR as usual.\n" <>
         "- Move the issue to `#{AutoReview.agent_review_state()}` when you believe it is ready for internal review.\n" <>
-        "- Symphony Pi will run an automated review pass there before any human handoff.\n" <>
-        "- Only a passing automated review should advance the issue to `#{AutoReview.human_review_state()}`.\n"
+        "- Symphony Pi will run exactly one automated review pass there before human handoff.\n" <>
+        "- Symphony Pi will post the internal review verdict for the human reviewer and then move the issue to `#{AutoReview.human_review_state()}`.\n"
     else
       prompt
     end

@@ -214,14 +214,11 @@ Notes:
 - `pi.extension_dir` optionally overrides the shipped Symphony Pi extension source. By default,
   Symphony loads its bundled `linear_graphql` extension automatically.
 - `auto_review` is optional and disabled by default.
-- When enabled, Symphony Pi runs a fresh review pass after the issue is
-  moved to `Agent Review`. If the reviewer asks for changes, Symphony Pi moves the issue back to
-  `Rework`, performs a focused rework pass, and can review again before final human handoff.
+- When enabled, Symphony Pi runs one fresh review pass after the issue is moved to `Agent Review`,
+  posts that verdict for humans, and then moves the issue to `Human Review`.
 - `auto_review.model` and `auto_review.thinking` override the base `pi` runtime for the review
   stage only. Configured implementation and review models are validated against the local `pi`
   installation at CLI startup.
-- `auto_review.max_rework_passes` limits how many automated fix/review loops Symphony Pi will do
-  before leaving the issue in `Rework`.
 - CLI runtime overrides take precedence over `WORKFLOW.md` for the current process only. This is
   useful for experimentation or one-off higher-quality runs without editing committed workflow files.
 - The review stage uses a fresh Pi session by default and a restricted review tool profile instead
@@ -311,7 +308,6 @@ auto_review:
   enabled: true
   model: openai/gpt-5.4
   thinking: medium
-  max_rework_passes: 1
   fresh_session: true
 ```
 
@@ -320,11 +316,10 @@ Behavior:
 - implementation still runs with the base `pi` config
 - when implementation is ready, the agent moves the issue to `Agent Review`
 - Symphony Pi runs a fresh internal review pass from `Agent Review`
-- if review passes, Symphony Pi moves the ticket to `Human Review`
-- if review requests changes, Symphony Pi moves the ticket to `Rework`, performs a focused rework pass, and can review again
-- if review fails unexpectedly, the ticket stays in `Agent Review` for manual investigation
-- the review verdict currently drives Symphony Pi's internal `Rework`/`Agent Review`/`Human Review` loop; it does
-  not yet post formal GitHub PR review comments on your behalf
+- Symphony Pi posts the review verdict and findings to Linear, then moves the ticket to `Human Review`
+- this happens whether the review passes, requests changes, or fails unexpectedly to produce a usable verdict
+- humans decide whether to approve, merge, or move the ticket to `Rework`
+- Symphony Pi does not yet post formal GitHub PR review comments on your behalf
 
 Prompt behavior:
 
@@ -373,6 +368,8 @@ Notes:
 - `symphony-pi setup` validates the state set that matches your setup choice:
   - auto-review disabled: no `Agent Review` required
   - auto-review enabled: `Agent Review` required
+- With auto-review enabled, the happy path is `Todo -> In Progress -> Agent Review -> Human Review`.
+- If a human requests changes, use `Human Review -> Rework -> Agent Review -> Human Review`.
 
 ## Runtime Safety
 

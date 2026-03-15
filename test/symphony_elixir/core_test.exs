@@ -1342,7 +1342,7 @@ defmodule SymphonyElixir.CoreTest do
     assert stopped_session.turn_number == 2
   end
 
-  test "agent runner can auto-review and rework before leaving human review" do
+  test "agent runner posts one auto-review verdict and then leaves for human review" do
     Application.put_env(:symphony_elixir, :backend_module_override, AutoReviewBackend)
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
@@ -1363,7 +1363,6 @@ defmodule SymphonyElixir.CoreTest do
       auto_review_enabled: true,
       auto_review_model: "openai/gpt-5",
       auto_review_thinking: "medium",
-      auto_review_max_rework_passes: 1,
       auto_review_fresh_session: true
     )
 
@@ -1384,8 +1383,6 @@ defmodule SymphonyElixir.CoreTest do
       state =
         case attempt do
           1 -> "Agent Review"
-          2 -> "Rework"
-          3 -> "Agent Review"
           _ -> "Done"
         end
 
@@ -1412,20 +1409,21 @@ defmodule SymphonyElixir.CoreTest do
     assert_receive {:auto_review_run_turn, :reviewer, "Agent Review", review_prompt}, 500
     assert review_prompt =~ "Return ONLY valid JSON"
 
-    assert_receive {:memory_tracker_state_update, "issue-auto-review", "Rework"}, 500
-    assert_receive {:auto_review_run_turn, :implementer, "Rework", rework_prompt}, 500
-    assert rework_prompt =~ "Rework cycle for Linear issue `MT-AR-1`."
+    assert_receive {:memory_tracker_comment, "issue-auto-review", review_comment}, 500
+    assert review_comment =~ "## Agent Review"
+    assert review_comment =~ "Verdict: CHANGES REQUESTED"
+    assert review_comment =~ "Missing TPSL builder_code"
 
-    assert_receive {:auto_review_start_session, :reviewer, _review_runtime_config, true}, 500
-    assert_receive {:auto_review_run_turn, :reviewer, "Agent Review", _review_prompt}, 500
     assert_receive {:memory_tracker_state_update, "issue-auto-review", "Human Review"}, 500
 
-    assert_receive {:auto_review_stop_session, :reviewer}, 500
+    assert_receive {:runtime_worker_update, "issue-auto-review", %{raw: "auto-review requested changes; posted findings and moved issue to Human Review"}},
+                   500
+
     assert_receive {:auto_review_stop_session, :reviewer}, 500
     assert_receive {:auto_review_stop_session, :implementer}, 500
   end
 
-  test "agent runner leaves the issue in Agent Review when auto-review output is invalid" do
+  test "agent runner posts a failure note and still leaves for human review when auto-review output is invalid" do
     Application.put_env(:symphony_elixir, :backend_module_override, AutoReviewBackend)
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
@@ -1472,8 +1470,12 @@ defmodule SymphonyElixir.CoreTest do
              )
 
     assert_receive {:runtime_worker_update, "issue-auto-review-invalid", %{raw: "auto-review started"}}, 500
+    assert_receive {:memory_tracker_comment, "issue-auto-review-invalid", review_comment}, 500
+    assert review_comment =~ "## Agent Review"
+    assert review_comment =~ "Verdict: REVIEW FAILED"
+    assert_receive {:memory_tracker_state_update, "issue-auto-review-invalid", "Human Review"}, 500
 
-    assert_receive {:runtime_worker_update, "issue-auto-review-invalid", %{raw: "auto-review failed; leaving issue in Agent Review"}},
+    assert_receive {:runtime_worker_update, "issue-auto-review-invalid", %{raw: "auto-review failed; posted failure note and moved issue to Human Review"}},
                    500
 
     assert_receive {:auto_review_stop_session, :reviewer}, 500
